@@ -17,6 +17,8 @@
 #include "uvc_frame_config.h"
 #include "example_video_common.h"
 
+#define IPA_TARGET_NAME     "sc202cs_default_p4_eco4"
+
 #if CONFIG_FORMAT_MJPEG_CAM1
 #define ENCODE_DEV_PATH     ESP_VIDEO_JPEG_DEVICE_NAME
 #define UVC_OUTPUT_FORMAT   V4L2_PIX_FMT_JPEG

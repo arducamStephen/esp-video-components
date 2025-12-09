@@ -1043,7 +1043,7 @@ menu "Example Video Initialization Configuration"
 
         config EXAMPLE_SCCB_I2C_SCL_PIN_INIT_BY_APP
             int "SCCB(I2C) SCL Pin"
-            default 8 if IDF_TARGET_ESP32P4
+            default 1 if IDF_TARGET_ESP32P4
             default 5
             range 0 54 if IDF_TARGET_ESP32P4
             range 0 48 if IDF_TARGET_ESP32S3
@@ -1057,7 +1057,7 @@ menu "Example Video Initialization Configuration"
 
         config EXAMPLE_SCCB_I2C_SDA_PIN_INIT_BY_APP
             int "SCCB(I2C) SDA Pin"
-            default 7 if IDF_TARGET_ESP32P4
+            default 0 if IDF_TARGET_ESP32P4
             default 4
             range 0 54 if IDF_TARGET_ESP32P4
             range 0 48 if IDF_TARGET_ESP32S3
