@@ -1,0 +1,1405 @@
+/*
+ * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <string.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include "driver/gpio.h"
+#include "esp_err.h"
+#include "esp_log.h"
+
+#include "esp_cam_sensor.h"
+#include "esp_cam_sensor_detect.h"
+#include "imx298_settings.h"
+#include "v4l2_cid.h"
+#include "imx298.h"
+
+/*
+ * IMX298 camera sensor gain control.
+ * Note1: The analog gain only has coarse gain, and no fine gain, so in the adjustment of analog gain.
+ * Digital gain needs to replace analog fine gain for smooth transition, so as to avoid AGC oscillation.
+ * Note2: the analog gain of IMX298 will be affected by temperature, it is recommended to increase Dgain first and then Again.
+ */
+typedef struct {
+    uint8_t dgain_fine; // digital gain fine
+    uint8_t dgain_coarse; // digital gain coarse
+    uint8_t analog_gain;
+} imx298_gain_t;
+
+typedef struct {
+    uint32_t exposure_val;
+    uint32_t gain_index; // current gain index
+
+    uint32_t vflip_en : 1;
+    uint32_t hmirror_en : 1;
+} imx298_para_t;
+
+struct imx298_cam {
+    imx298_para_t imx298_para;
+};
+
+#define IMX298_IO_MUX_LOCK(mux)
+#define IMX298_IO_MUX_UNLOCK(mux)
+#define IMX298_ENABLE_OUT_XCLK(pin,clk)
+#define IMX298_DISABLE_OUT_XCLK(pin)
+
+#define IMX298_FETCH_EXP_H(val)     (((val) >> 12) & 0xF)
+#define IMX298_FETCH_EXP_M(val)     (((val) >> 4) & 0xFF)
+#define IMX298_FETCH_EXP_L(val)     (((val) & 0xF) << 4)
+
+#ifndef portTICK_RATE_MS
+#define portTICK_RATE_MS portTICK_PERIOD_MS
+#endif
+#define delay_ms(ms)  vTaskDelay((ms > portTICK_PERIOD_MS ? ms/ portTICK_PERIOD_MS : 1))
+#define IMX298_SUPPORT_NUM CONFIG_CAMERA_IMX298_MAX_SUPPORT
+
+static const uint32_t s_limited_abs_gain = CONFIG_CAMERA_IMX298_ABSOLUTE_GAIN_LIMIT;
+static size_t s_limited_abs_gain_index;
+static const char *TAG = "imx298";
+
+#if CONFIG_CAMERA_IMX298_ANA_GAIN_PRIORITY
+// total gain = analog_gain x digital_gain x 1000(To avoid decimal points, the final abs_gain is multiplied by 1000.)
+static const uint32_t imx298_abs_gain_val_map[] = {
+    1000,
+    1031,
+    1063,
+    1094,
+    1125,
+    1156,
+    1188,
+    1219,
+    1250,
+    1281,
+    1313,
+    1344,
+    1375,
+    1406,
+    1438,
+    1469,
+    1500,
+    1531,
+    1563,
+    1594,
+    1625,
+    1656,
+    1688,
+    1719,
+    1750,
+    1781,
+    1813,
+    1844,
+    1875,
+    1906,
+    1938,
+    1969,
+    // 2X
+    2000,
+    2062,
+    2126,
+    2188,
+    2250,
+    2312,
+    2376,
+    2438,
+    2500,
+    2562,
+    2626,
+    2688,
+    2750,
+    2812,
+    2876,
+    2938,
+    3000,
+    3062,
+    3126,
+    3188,
+    3250,
+    3312,
+    3376,
+    3438,
+    3500,
+    3562,
+    3626,
+    3688,
+    3750,
+    3812,
+    3876,
+    3938,
+    // 4X
+    4000,
+    4124,
+    4252,
+    4376,
+    4500,
+    4624,
+    4752,
+    4876,
+    5000,
+    5124,
+    5252,
+    5376,
+    5500,
+    5624,
+    5752,
+    5876,
+    6000,
+    6124,
+    6252,
+    6376,
+    6500,
+    6624,
+    6752,
+    6876,
+    7000,
+    7124,
+    7252,
+    7376,
+    7500,
+    7624,
+    7752,
+    7876,
+    // 8X
+    8000,
+    8248,
+    8504,
+    8752,
+    9000,
+    9248,
+    9504,
+    9752,
+    10000,
+    10248,
+    10504,
+    10752,
+    11000,
+    11248,
+    11504,
+    11752,
+    12000,
+    12248,
+    12504,
+    12752,
+    13000,
+    13248,
+    13504,
+    13752,
+    14000,
+    14248,
+    14504,
+    14752,
+    15000,
+    15248,
+    15504,
+    15752,
+    // 16X
+    16000,
+    16496,
+    17008,
+    17504,
+    18000,
+    18496,
+    19008,
+    19504,
+    20000,
+    20496,
+    21008,
+    21504,
+    22000,
+    22496,
+    23008,
+    23504,
+    24000,
+    24496,
+    25008,
+    25504,
+    26000,
+    26496,
+    27008,
+    27504,
+    28000,
+    28496,
+    29008,
+    29504,
+    30000,
+    30496,
+    31008,
+    31504,
+    // 32X
+    32000,
+    33008,
+    34000,
+    35008,
+    36000,
+    37008,
+    38000,
+    39008,
+    40000,
+    41008,
+    42000,
+    43008,
+    44000,
+    45008,
+    46000,
+    47008,
+    48000,
+    49008,
+    50000,
+    51008,
+    52000,
+    53008,
+    54000,
+    55008,
+    56000,
+    57008,
+    58000,
+    59008,
+    60000,
+    61008,
+    62000,
+    63008,
+};
+
+// IMX298 Gain map format: [DIG_FINE, DIG_COARSE, ANG]
+static const imx298_gain_t imx298_gain_map[] = {
+    {0x80, 0x00, 0x00},
+    {0x84, 0x00, 0x00},
+    {0x88, 0x00, 0x00},
+    {0x8c, 0x00, 0x00},
+    {0x90, 0x00, 0x00},
+    {0x94, 0x00, 0x00},
+    {0x98, 0x00, 0x00},
+    {0x9c, 0x00, 0x00},
+    {0xa0, 0x00, 0x00},
+    {0xa4, 0x00, 0x00},
+    {0xa8, 0x00, 0x00},
+    {0xac, 0x00, 0x00},
+    {0xb0, 0x00, 0x00},
+    {0xb4, 0x00, 0x00},
+    {0xb8, 0x00, 0x00},
+    {0xbc, 0x00, 0x00},
+    {0xc0, 0x00, 0x00},
+    {0xc4, 0x00, 0x00},
+    {0xc8, 0x00, 0x00},
+    {0xcc, 0x00, 0x00},
+    {0xd0, 0x00, 0x00},
+    {0xd4, 0x00, 0x00},
+    {0xd8, 0x00, 0x00},
+    {0xdc, 0x00, 0x00},
+    {0xe0, 0x00, 0x00},
+    {0xe4, 0x00, 0x00},
+    {0xe8, 0x00, 0x00},
+    {0xec, 0x00, 0x00},
+    {0xf0, 0x00, 0x00},
+    {0xf4, 0x00, 0x00},
+    {0xf8, 0x00, 0x00},
+    {0xfc, 0x00, 0x00},
+    // 2X
+    {0x80, 0x00, 0x01},
+    {0x84, 0x00, 0x01},
+    {0x88, 0x00, 0x01},
+    {0x8c, 0x00, 0x01},
+    {0x90, 0x00, 0x01},
+    {0x94, 0x00, 0x01},
+    {0x98, 0x00, 0x01},
+    {0x9c, 0x00, 0x01},
+    {0xa0, 0x00, 0x01},
+    {0xa4, 0x00, 0x01},
+    {0xa8, 0x00, 0x01},
+    {0xac, 0x00, 0x01},
+    {0xb0, 0x00, 0x01},
+    {0xb4, 0x00, 0x01},
+    {0xb8, 0x00, 0x01},
+    {0xbc, 0x00, 0x01},
+    {0xc0, 0x00, 0x01},
+    {0xc4, 0x00, 0x01},
+    {0xc8, 0x00, 0x01},
+    {0xcc, 0x00, 0x01},
+    {0xd0, 0x00, 0x01},
+    {0xd4, 0x00, 0x01},
+    {0xd8, 0x00, 0x01},
+    {0xdc, 0x00, 0x01},
+    {0xe0, 0x00, 0x01},
+    {0xe4, 0x00, 0x01},
+    {0xe8, 0x00, 0x01},
+    {0xec, 0x00, 0x01},
+    {0xf0, 0x00, 0x01},
+    {0xf4, 0x00, 0x01},
+    {0xf8, 0x00, 0x01},
+    {0xfc, 0x00, 0x01},
+    // 4X
+    {0x80, 0x00, 0x03},
+    {0x84, 0x00, 0x03},
+    {0x88, 0x00, 0x03},
+    {0x8c, 0x00, 0x03},
+    {0x90, 0x00, 0x03},
+    {0x94, 0x00, 0x03},
+    {0x98, 0x00, 0x03},
+    {0x9c, 0x00, 0x03},
+    {0xa0, 0x00, 0x03},
+    {0xa4, 0x00, 0x03},
+    {0xa8, 0x00, 0x03},
+    {0xac, 0x00, 0x03},
+    {0xb0, 0x00, 0x03},
+    {0xb4, 0x00, 0x03},
+    {0xb8, 0x00, 0x03},
+    {0xbc, 0x00, 0x03},
+    {0xc0, 0x00, 0x03},
+    {0xc4, 0x00, 0x03},
+    {0xc8, 0x00, 0x03},
+    {0xcc, 0x00, 0x03},
+    {0xd0, 0x00, 0x03},
+    {0xd4, 0x00, 0x03},
+    {0xd8, 0x00, 0x03},
+    {0xdc, 0x00, 0x03},
+    {0xe0, 0x00, 0x03},
+    {0xe4, 0x00, 0x03},
+    {0xe8, 0x00, 0x03},
+    {0xec, 0x00, 0x03},
+    {0xf0, 0x00, 0x03},
+    {0xf4, 0x00, 0x03},
+    {0xf8, 0x00, 0x03},
+    {0xfc, 0x00, 0x03},
+    // 8X
+    {0x80, 0x00, 0x07},
+    {0x84, 0x00, 0x07},
+    {0x88, 0x00, 0x07},
+    {0x8c, 0x00, 0x07},
+    {0x90, 0x00, 0x07},
+    {0x94, 0x00, 0x07},
+    {0x98, 0x00, 0x07},
+    {0x9c, 0x00, 0x07},
+    {0xa0, 0x00, 0x07},
+    {0xa4, 0x00, 0x07},
+    {0xa8, 0x00, 0x07},
+    {0xac, 0x00, 0x07},
+    {0xb0, 0x00, 0x07},
+    {0xb4, 0x00, 0x07},
+    {0xb8, 0x00, 0x07},
+    {0xbc, 0x00, 0x07},
+    {0xc0, 0x00, 0x07},
+    {0xc4, 0x00, 0x07},
+    {0xc8, 0x00, 0x07},
+    {0xcc, 0x00, 0x07},
+    {0xd0, 0x00, 0x07},
+    {0xd4, 0x00, 0x07},
+    {0xd8, 0x00, 0x07},
+    {0xdc, 0x00, 0x07},
+    {0xe0, 0x00, 0x07},
+    {0xe4, 0x00, 0x07},
+    {0xe8, 0x00, 0x07},
+    {0xec, 0x00, 0x07},
+    {0xf0, 0x00, 0x07},
+    {0xf4, 0x00, 0x07},
+    {0xf8, 0x00, 0x07},
+    {0xfc, 0x00, 0x07},
+    // 16X
+    {0x80, 0x00, 0x0f},
+    {0x84, 0x00, 0x0f},
+    {0x88, 0x00, 0x0f},
+    {0x8c, 0x00, 0x0f},
+    {0x90, 0x00, 0x0f},
+    {0x94, 0x00, 0x0f},
+    {0x98, 0x00, 0x0f},
+    {0x9c, 0x00, 0x0f},
+    {0xa0, 0x00, 0x0f},
+    {0xa4, 0x00, 0x0f},
+    {0xa8, 0x00, 0x0f},
+    {0xac, 0x00, 0x0f},
+    {0xb0, 0x00, 0x0f},
+    {0xb4, 0x00, 0x0f},
+    {0xb8, 0x00, 0x0f},
+    {0xbc, 0x00, 0x0f},
+    {0xc0, 0x00, 0x0f},
+    {0xc4, 0x00, 0x0f},
+    {0xc8, 0x00, 0x0f},
+    {0xcc, 0x00, 0x0f},
+    {0xd0, 0x00, 0x0f},
+    {0xd4, 0x00, 0x0f},
+    {0xd8, 0x00, 0x0f},
+    {0xdc, 0x00, 0x0f},
+    {0xe0, 0x00, 0x0f},
+    {0xe4, 0x00, 0x0f},
+    {0xe8, 0x00, 0x0f},
+    {0xec, 0x00, 0x0f},
+    {0xf0, 0x00, 0x0f},
+    {0xf4, 0x00, 0x0f},
+    {0xf8, 0x00, 0x0f},
+    {0xfc, 0x00, 0x0f},
+    //32x
+    {0x80, 0x01, 0x0f},
+    {0x84, 0x01, 0x0f},
+    {0x88, 0x01, 0x0f},
+    {0x8c, 0x01, 0x0f},
+    {0x90, 0x01, 0x0f},
+    {0x94, 0x01, 0x0f},
+    {0x98, 0x01, 0x0f},
+    {0x9c, 0x01, 0x0f},
+    {0xa0, 0x01, 0x0f},
+    {0xa4, 0x01, 0x0f},
+    {0xa8, 0x01, 0x0f},
+    {0xac, 0x01, 0x0f},
+    {0xb0, 0x01, 0x0f},
+    {0xb4, 0x01, 0x0f},
+    {0xb8, 0x01, 0x0f},
+    {0xbc, 0x01, 0x0f},
+    {0xc0, 0x01, 0x0f},
+    {0xc4, 0x01, 0x0f},
+    {0xc8, 0x01, 0x0f},
+    {0xcc, 0x01, 0x0f},
+    {0xd0, 0x01, 0x0f},
+    {0xd4, 0x01, 0x0f},
+    {0xd8, 0x01, 0x0f},
+    {0xdc, 0x01, 0x0f},
+    {0xe0, 0x01, 0x0f},
+    {0xe4, 0x01, 0x0f},
+    {0xe8, 0x01, 0x0f},
+    {0xec, 0x01, 0x0f},
+    {0xf0, 0x01, 0x0f},
+    {0xf4, 0x01, 0x0f},
+    {0xf8, 0x01, 0x0f},
+    {0xfc, 0x01, 0x0f},
+};
+#elif CONFIG_CAMERA_IMX298_DIG_GAIN_PRIORITY
+// total gain = analog_gain x digital_gain x 1000(To avoid decimal points, the final abs_gain is multiplied by 1000.)
+static const uint32_t imx298_abs_gain_val_map[] = {
+    1000,
+    1031,
+    1063,
+    1094,
+    1125,
+    1156,
+    1188,
+    1219,
+    1250,
+    1281,
+    1313,
+    1344,
+    1375,
+    1406,
+    1438,
+    1469,
+    1500,
+    1531,
+    1563,
+    1594,
+    1625,
+    1656,
+    1688,
+    1719,
+    1750,
+    1781,
+    1813,
+    1844,
+    1875,
+    1906,
+    1938,
+    1969,
+    // 2X
+    2000,
+    2063,
+    2125,
+    2188,
+    2250,
+    2313,
+    2375,
+    2438,
+    2500,
+    2563,
+    2625,
+    2688,
+    2750,
+    2813,
+    2875,
+    2938,
+    3000,
+    3063,
+    3125,
+    3188,
+    3250,
+    3313,
+    3375,
+    3438,
+    3500,
+    3563,
+    3625,
+    3688,
+    3750,
+    3813,
+    3875,
+    3938,
+    // 4X
+    4000,
+    4126,
+    4250,
+    4376,
+    4500,
+    4626,
+    4750,
+    4876,
+    5000,
+    5126,
+    5250,
+    5376,
+    5500,
+    5626,
+    5750,
+    5876,
+    6000,
+    6126,
+    6250,
+    6376,
+    6500,
+    6626,
+    6750,
+    6876,
+    7000,
+    7126,
+    7250,
+    7376,
+    7500,
+    7626,
+    7750,
+    7876,
+    // 8X
+    8000,
+    8252,
+    8500,
+    8752,
+    9000,
+    9252,
+    9500,
+    9752,
+    10000,
+    10252,
+    10500,
+    10752,
+    11000,
+    11252,
+    11500,
+    11752,
+    12000,
+    12252,
+    12500,
+    12752,
+    13000,
+    13252,
+    13500,
+    13752,
+    14000,
+    14252,
+    14500,
+    14752,
+    15000,
+    15252,
+    15500,
+    15752,
+    // 16X
+    16000,
+    16504,
+    17000,
+    17504,
+    18000,
+    18504,
+    19000,
+    19504,
+    20000,
+    20504,
+    21000,
+    21504,
+    22000,
+    22504,
+    23000,
+    23504,
+    24000,
+    24504,
+    25000,
+    25504,
+    26000,
+    26504,
+    27000,
+    27504,
+    28000,
+    28504,
+    29000,
+    29504,
+    30000,
+    30504,
+    31000,
+    31504,
+    // 32X
+    32000,
+    33008,
+    34000,
+    35008,
+    36000,
+    37008,
+    38000,
+    39008,
+    40000,
+    41008,
+    42000,
+    43008,
+    44000,
+    45008,
+    46000,
+    47008,
+    48000,
+    49008,
+    50000,
+    51008,
+    52000,
+    53008,
+    54000,
+    55008,
+    56000,
+    57008,
+    58000,
+    59008,
+    60000,
+    61008,
+    62000,
+    63008,
+};
+
+// IMX298 Gain map format: [DIG_FINE, DIG_COARSE, ANG]
+static const imx298_gain_t imx298_gain_map[] = {
+    {0x80, 0x00, 0x00},
+    {0x84, 0x00, 0x00},
+    {0x88, 0x00, 0x00},
+    {0x8c, 0x00, 0x00},
+    {0x90, 0x00, 0x00},
+    {0x94, 0x00, 0x00},
+    {0x98, 0x00, 0x00},
+    {0x9c, 0x00, 0x00},
+    {0xa0, 0x00, 0x00},
+    {0xa4, 0x00, 0x00},
+    {0xa8, 0x00, 0x00},
+    {0xac, 0x00, 0x00},
+    {0xb0, 0x00, 0x00},
+    {0xb4, 0x00, 0x00},
+    {0xb8, 0x00, 0x00},
+    {0xbc, 0x00, 0x00},
+    {0xc0, 0x00, 0x00},
+    {0xc4, 0x00, 0x00},
+    {0xc8, 0x00, 0x00},
+    {0xcc, 0x00, 0x00},
+    {0xd0, 0x00, 0x00},
+    {0xd4, 0x00, 0x00},
+    {0xd8, 0x00, 0x00},
+    {0xdc, 0x00, 0x00},
+    {0xe0, 0x00, 0x00},
+    {0xe4, 0x00, 0x00},
+    {0xe8, 0x00, 0x00},
+    {0xec, 0x00, 0x00},
+    {0xf0, 0x00, 0x00},
+    {0xf4, 0x00, 0x00},
+    {0xf8, 0x00, 0x00},
+    {0xfc, 0x00, 0x00},
+    // 2X
+    {0x80, 0x01, 0x00},
+    {0x84, 0x01, 0x00},
+    {0x88, 0x01, 0x00},
+    {0x8c, 0x01, 0x00},
+    {0x90, 0x01, 0x00},
+    {0x94, 0x01, 0x00},
+    {0x98, 0x01, 0x00},
+    {0x9c, 0x01, 0x00},
+    {0xa0, 0x01, 0x00},
+    {0xa4, 0x01, 0x00},
+    {0xa8, 0x01, 0x00},
+    {0xac, 0x01, 0x00},
+    {0xb0, 0x01, 0x00},
+    {0xb4, 0x01, 0x00},
+    {0xb8, 0x01, 0x00},
+    {0xbc, 0x01, 0x00},
+    {0xc0, 0x01, 0x00},
+    {0xc4, 0x01, 0x00},
+    {0xc8, 0x01, 0x00},
+    {0xcc, 0x01, 0x00},
+    {0xd0, 0x01, 0x00},
+    {0xd4, 0x01, 0x00},
+    {0xd8, 0x01, 0x00},
+    {0xdc, 0x01, 0x00},
+    {0xe0, 0x01, 0x00},
+    {0xe4, 0x01, 0x00},
+    {0xe8, 0x01, 0x00},
+    {0xec, 0x01, 0x00},
+    {0xf0, 0x01, 0x00},
+    {0xf4, 0x01, 0x00},
+    {0xf8, 0x01, 0x00},
+    {0xfc, 0x01, 0x00},
+    // 4X
+    {0x80, 0x01, 0x01},
+    {0x84, 0x01, 0x01},
+    {0x88, 0x01, 0x01},
+    {0x8c, 0x01, 0x01},
+    {0x90, 0x01, 0x01},
+    {0x94, 0x01, 0x01},
+    {0x98, 0x01, 0x01},
+    {0x9c, 0x01, 0x01},
+    {0xa0, 0x01, 0x01},
+    {0xa4, 0x01, 0x01},
+    {0xa8, 0x01, 0x01},
+    {0xac, 0x01, 0x01},
+    {0xb0, 0x01, 0x01},
+    {0xb4, 0x01, 0x01},
+    {0xb8, 0x01, 0x01},
+    {0xbc, 0x01, 0x01},
+    {0xc0, 0x01, 0x01},
+    {0xc4, 0x01, 0x01},
+    {0xc8, 0x01, 0x01},
+    {0xcc, 0x01, 0x01},
+    {0xd0, 0x01, 0x01},
+    {0xd4, 0x01, 0x01},
+    {0xd8, 0x01, 0x01},
+    {0xdc, 0x01, 0x01},
+    {0xe0, 0x01, 0x01},
+    {0xe4, 0x01, 0x01},
+    {0xe8, 0x01, 0x01},
+    {0xec, 0x01, 0x01},
+    {0xf0, 0x01, 0x01},
+    {0xf4, 0x01, 0x01},
+    {0xf8, 0x01, 0x01},
+    {0xfc, 0x01, 0x01},
+    // 8X
+    {0x80, 0x01, 0x03},
+    {0x84, 0x01, 0x03},
+    {0x88, 0x01, 0x03},
+    {0x8c, 0x01, 0x03},
+    {0x90, 0x01, 0x03},
+    {0x94, 0x01, 0x03},
+    {0x98, 0x01, 0x03},
+    {0x9c, 0x01, 0x03},
+    {0xa0, 0x01, 0x03},
+    {0xa4, 0x01, 0x03},
+    {0xa8, 0x01, 0x03},
+    {0xac, 0x01, 0x03},
+    {0xb0, 0x01, 0x03},
+    {0xb4, 0x01, 0x03},
+    {0xb8, 0x01, 0x03},
+    {0xbc, 0x01, 0x03},
+    {0xc0, 0x01, 0x03},
+    {0xc4, 0x01, 0x03},
+    {0xc8, 0x01, 0x03},
+    {0xcc, 0x01, 0x03},
+    {0xd0, 0x01, 0x03},
+    {0xd4, 0x01, 0x03},
+    {0xd8, 0x01, 0x03},
+    {0xdc, 0x01, 0x03},
+    {0xe0, 0x01, 0x03},
+    {0xe4, 0x01, 0x03},
+    {0xe8, 0x01, 0x03},
+    {0xec, 0x01, 0x03},
+    {0xf0, 0x01, 0x03},
+    {0xf4, 0x01, 0x03},
+    {0xf8, 0x01, 0x03},
+    {0xfc, 0x01, 0x03},
+    // 16X
+    {0x80, 0x01, 0x07},
+    {0x84, 0x01, 0x07},
+    {0x88, 0x01, 0x07},
+    {0x8c, 0x01, 0x07},
+    {0x90, 0x01, 0x07},
+    {0x94, 0x01, 0x07},
+    {0x98, 0x01, 0x07},
+    {0x9c, 0x01, 0x07},
+    {0xa0, 0x01, 0x07},
+    {0xa4, 0x01, 0x07},
+    {0xa8, 0x01, 0x07},
+    {0xac, 0x01, 0x07},
+    {0xb0, 0x01, 0x07},
+    {0xb4, 0x01, 0x07},
+    {0xb8, 0x01, 0x07},
+    {0xbc, 0x01, 0x07},
+    {0xc0, 0x01, 0x07},
+    {0xc4, 0x01, 0x07},
+    {0xc8, 0x01, 0x07},
+    {0xcc, 0x01, 0x07},
+    {0xd0, 0x01, 0x07},
+    {0xd4, 0x01, 0x07},
+    {0xd8, 0x01, 0x07},
+    {0xdc, 0x01, 0x07},
+    {0xe0, 0x01, 0x07},
+    {0xe4, 0x01, 0x07},
+    {0xe8, 0x01, 0x07},
+    {0xec, 0x01, 0x07},
+    {0xf0, 0x01, 0x07},
+    {0xf4, 0x01, 0x07},
+    {0xf8, 0x01, 0x07},
+    {0xfc, 0x01, 0x07},
+    //32x
+    {0x80, 0x01, 0x0f},
+    {0x84, 0x01, 0x0f},
+    {0x88, 0x01, 0x0f},
+    {0x8c, 0x01, 0x0f},
+    {0x90, 0x01, 0x0f},
+    {0x94, 0x01, 0x0f},
+    {0x98, 0x01, 0x0f},
+    {0x9c, 0x01, 0x0f},
+    {0xa0, 0x01, 0x0f},
+    {0xa4, 0x01, 0x0f},
+    {0xa8, 0x01, 0x0f},
+    {0xac, 0x01, 0x0f},
+    {0xb0, 0x01, 0x0f},
+    {0xb4, 0x01, 0x0f},
+    {0xb8, 0x01, 0x0f},
+    {0xbc, 0x01, 0x0f},
+    {0xc0, 0x01, 0x0f},
+    {0xc4, 0x01, 0x0f},
+    {0xc8, 0x01, 0x0f},
+    {0xcc, 0x01, 0x0f},
+    {0xd0, 0x01, 0x0f},
+    {0xd4, 0x01, 0x0f},
+    {0xd8, 0x01, 0x0f},
+    {0xdc, 0x01, 0x0f},
+    {0xe0, 0x01, 0x0f},
+    {0xe4, 0x01, 0x0f},
+    {0xe8, 0x01, 0x0f},
+    {0xec, 0x01, 0x0f},
+    {0xf0, 0x01, 0x0f},
+    {0xf4, 0x01, 0x0f},
+    {0xf8, 0x01, 0x0f},
+    {0xfc, 0x01, 0x0f},
+};
+#endif // end CONFIG_ANA_GAIN_PRIORITY
+
+static const esp_cam_sensor_isp_info_t imx298_isp_info[] = {
+
+    {
+        .isp_v1_info = {
+            .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
+            .pclk = 72000000,
+            .vts = 1250,
+            .hts = 1920,
+            .tline_ns = 26666,
+            .gain_def = 0, // gain index, depend on {0x3e06, 0x3e07, 0x3e09}, since these registers are not set in format reg_list, the default values ​​are used here.
+            .exp_def = 0x4dc, // depend on {0x3e00, 0x3e01, 0x3e02}, see format_reg_list to get the default value.
+            .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
+        }
+    }
+
+};
+
+static const esp_cam_sensor_format_t imx298_format_info[] = {
+
+    //      {
+    //     .name = "MIPI_1lane_24Minput_RAW8_1280x720_30fps",
+    //     .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
+    //     .port = ESP_CAM_SENSOR_MIPI_CSI,
+    //     .xclk = 24000000,
+    //     .width = 1280,
+    //     .height = 720,
+    //     .regs = init_reglist_MIPI_1lane_raw10_1280x720_30fps,
+    //     .regs_size = ARRAY_SIZE(init_reglist_MIPI_1lane_raw10_1280x720_30fps),
+    //     .fps = 30,
+    //     .isp_info = &sc202cs_isp_info[0],
+    //     .mipi_info = {
+    //         .mipi_clk = 576000000,
+    //         .lane_num = 2,
+    //         .line_sync_en = false,
+    //     },
+    //     .reserved = NULL,
+    // },
+  
+    {
+        .name = "MIPI_2lane_24Minput_RAW10_1600x1200_30fps",
+        .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
+        .port = ESP_CAM_SENSOR_MIPI_CSI,
+        .xclk = 24000000,
+        .width = 1280,
+        .height = 720,
+        .regs = imx298_MIPI_2lane_raw10_1280x720_30fps,
+        .regs_size = ARRAY_SIZE(imx298_MIPI_2lane_raw10_1280x720_30fps),
+        .fps = 30,
+        .isp_info = &imx298_isp_info[0],
+        .mipi_info = {
+            .mipi_clk = 912000000,
+            .lane_num = 2,
+            .line_sync_en = false,
+        },
+        .reserved = NULL,
+    }
+};
+
+static esp_err_t imx298_read(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint32_t *read_buf)
+{
+    return esp_sccb_transmit_receive_reg_a16v32(sccb_handle, reg, read_buf);
+}
+
+static esp_err_t imx298_write(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint32_t data)
+{
+    return esp_sccb_transmit_reg_a16v32(sccb_handle, reg, data);
+}
+
+/* write a array of registers  */
+static esp_err_t imx298_write_array(esp_sccb_io_handle_t sccb_handle, imx298_reginfo_t *regarray)
+{
+    int i = 0;
+    esp_err_t ret = ESP_OK;
+    while ((ret == ESP_OK) && regarray[i].reg != IMX298_REG_END) {
+        if (regarray[i].reg != IMX298_REG_DELAY) {
+            ret = imx298_write(sccb_handle, regarray[i].reg, regarray[i].val);
+        } else {
+            delay_ms(regarray[i].val);
+        }
+        i++;
+    }
+    return ret;
+}
+
+static esp_err_t imx298_set_reg_bits(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint8_t offset, uint8_t length, uint8_t value)
+{
+    esp_err_t ret = ESP_OK;
+    // uint8_t reg_data = 0;
+
+    // ret = imx298_read(sccb_handle, reg, &reg_data);
+    // if (ret != ESP_OK) {
+    //     return ret;
+    // }
+    // uint8_t mask = ((1 << length) - 1) << offset;
+    // value = (reg_data & ~mask) | ((value << offset) & mask);
+    // ret = imx298_write(sccb_handle, reg, value);
+    return ret;
+}
+
+static esp_err_t imx298_set_test_pattern(esp_cam_sensor_device_t *dev, int enable)
+{
+    return imx298_set_reg_bits(dev->sccb_handle, 0x4501, 3, 1, enable ? 0x01 : 0x00);
+}
+
+static esp_err_t imx298_hw_reset(esp_cam_sensor_device_t *dev)
+{
+    // if (dev->reset_pin >= 0) {
+    //     gpio_set_level(dev->reset_pin, 0);
+    //     delay_ms(10);
+    //     gpio_set_level(dev->reset_pin, 1);
+    //     delay_ms(10);
+    // }
+    return ESP_OK;
+}
+
+static esp_err_t imx298_soft_reset(esp_cam_sensor_device_t *dev)
+{
+    esp_err_t ret = ESP_OK;
+    // esp_err_t ret = imx298_set_reg_bits(dev->sccb_handle, 0x0103, 0, 1, 0x01);
+    // delay_ms(5);
+    return ret;
+}
+
+static esp_err_t imx298_get_sensor_id(esp_cam_sensor_device_t *dev, esp_cam_sensor_id_t *id)
+{
+    esp_err_t ret = ESP_FAIL;
+    uint32_t pid_h;
+
+    ret = imx298_read(dev->sccb_handle, SENSOR_ID_REG, &pid_h);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    id->pid = pid_h ;
+
+    return ret;
+}
+
+static esp_err_t imx298_set_stream(esp_cam_sensor_device_t *dev, int enable)
+{
+    esp_err_t ret = ESP_FAIL;
+    ret = imx298_write(dev->sccb_handle, STREAM_ON, enable ? 0x01 : 0x00);
+
+    dev->stream_status = enable;
+    ESP_LOGD(TAG, "Stream=%d", enable);
+    return ret;
+}
+
+static esp_err_t imx298_set_mirror(esp_cam_sensor_device_t *dev, int enable)
+{
+    return 0;//imx298_set_reg_bits(dev->sccb_handle, 0x3221, 1, 2, enable ? 0x03 : 0x00);
+}
+
+static esp_err_t imx298_set_vflip(esp_cam_sensor_device_t *dev, int enable)
+{
+    return 0;// imx298_set_reg_bits(dev->sccb_handle, 0x3221, 5, 2, enable ? 0x03 : 0x00);
+}
+
+static esp_err_t imx298_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam_sensor_param_desc_t *qdesc)
+{
+    esp_err_t ret = ESP_OK;
+    switch (qdesc->id) {
+    case ESP_CAM_SENSOR_EXPOSURE_VAL:
+        qdesc->type = ESP_CAM_SENSOR_PARAM_TYPE_NUMBER;
+        qdesc->number.minimum = 0x08;
+        qdesc->number.maximum = dev->cur_format->isp_info->isp_v1_info.vts - 6; // max = VTS-6 = height+vblank-6, so when update vblank, exposure_max must be updated
+        qdesc->number.step = 1;
+        qdesc->default_value = dev->cur_format->isp_info->isp_v1_info.exp_def;
+        break;
+    case ESP_CAM_SENSOR_GAIN:
+        qdesc->type = ESP_CAM_SENSOR_PARAM_TYPE_ENUMERATION;
+        qdesc->enumeration.count = s_limited_abs_gain_index;
+        qdesc->enumeration.elements = imx298_abs_gain_val_map;
+        qdesc->default_value = dev->cur_format->isp_info->isp_v1_info.gain_def; // default gain index
+        break;
+    case ESP_CAM_SENSOR_VFLIP:
+    case ESP_CAM_SENSOR_HMIRROR:
+        qdesc->type = ESP_CAM_SENSOR_PARAM_TYPE_NUMBER;
+        qdesc->number.minimum = 0;
+        qdesc->number.maximum = 1;
+        qdesc->number.step = 1;
+        qdesc->default_value = 0;
+        break;
+    default: {
+        ESP_LOGD(TAG, "id=%"PRIx32" is not supported", qdesc->id);
+        ret = ESP_ERR_INVALID_ARG;
+        break;
+    }
+    }
+    return ret;
+}
+
+static esp_err_t imx298_get_para_value(esp_cam_sensor_device_t *dev, uint32_t id, void *arg, size_t size)
+{
+    esp_err_t ret = ESP_OK;
+    struct imx298_cam *cam_imx298 = (struct imx298_cam *)dev->priv;
+    switch (id) {
+    case ESP_CAM_SENSOR_EXPOSURE_VAL: {
+        *(uint32_t *)arg = cam_imx298->imx298_para.exposure_val;
+        break;
+    }
+    case ESP_CAM_SENSOR_GAIN: {
+        *(uint32_t *)arg = cam_imx298->imx298_para.gain_index;
+        break;
+    }
+    default: {
+        ret = ESP_ERR_NOT_SUPPORTED;
+        break;
+    }
+    }
+    return ret;
+}
+
+static esp_err_t imx298_set_para_value(esp_cam_sensor_device_t *dev, uint32_t id, const void *arg, size_t size)
+{
+    esp_err_t ret = ESP_OK;
+    uint32_t u32_val = *(uint32_t *)arg;
+    struct imx298_cam *cam_imx298 = (struct imx298_cam *)dev->priv;
+
+    switch (id) {
+    case ESP_CAM_SENSOR_EXPOSURE_VAL: {
+        ESP_LOGD(TAG, "set exposure 0x%" PRIx32, u32_val);
+        /* 4 least significant bits of expsoure are fractional part */
+        // ret = imx298_write(dev->sccb_handle,
+        //                     IMX298_REG_SHUTTER_TIME_H,
+        //                     IMX298_FETCH_EXP_H(u32_val));
+        // ret |= imx298_write(dev->sccb_handle,
+        //                      IMX298_REG_SHUTTER_TIME_M,
+        //                      IMX298_FETCH_EXP_M(u32_val));
+        // ret |= imx298_write(dev->sccb_handle,
+        //                      IMX298_REG_SHUTTER_TIME_L,
+        //                      IMX298_FETCH_EXP_L(u32_val));
+    imx298_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_EXPOSURE);
+    imx298_write(dev->sccb_handle, CTRL_VALUE_REG, u32_val);
+
+        if (ret == ESP_OK) {
+            cam_imx298->imx298_para.exposure_val = u32_val;
+        }
+        break;
+    }
+    case ESP_CAM_SENSOR_GAIN: {
+        ESP_LOGD(TAG, "dgain_fine %" PRIx8 ", dgain_coarse %" PRIx8 ", again_coarse %" PRIx8, imx298_gain_map[u32_val].dgain_fine, imx298_gain_map[u32_val].dgain_coarse, imx298_gain_map[u32_val].analog_gain);
+        // ret = imx298_write(dev->sccb_handle,
+        //                     IMX298_REG_DIG_FINE_GAIN,
+        //                     imx298_gain_map[u32_val].dgain_fine);
+        // ret |= imx298_write(dev->sccb_handle,
+        //                      IMX298_REG_DIG_COARSE_GAIN,
+        //                      imx298_gain_map[u32_val].dgain_coarse);
+        // ret |= imx298_write(dev->sccb_handle,
+        //                      IMX298_REG_ANG_GAIN,
+        //                      imx298_gain_map[u32_val].analog_gain);
+
+        imx298_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_GAIN);
+        imx298_write(dev->sccb_handle, CTRL_VALUE_REG, imx298_gain_map[u32_val].analog_gain);
+        if (ret == ESP_OK) {
+            cam_imx298->imx298_para.gain_index = u32_val;
+        }
+        break;
+    }
+    case ESP_CAM_SENSOR_VFLIP: {
+        int *value = (int *)arg;
+        ret = imx298_set_vflip(dev, *value);
+        break;
+    }
+    case ESP_CAM_SENSOR_HMIRROR: {
+        int *value = (int *)arg;
+        ret = imx298_set_mirror(dev, *value);
+        break;
+    }
+    default: {
+        ESP_LOGE(TAG, "set id=%" PRIx32 " is not supported", id);
+        ret = ESP_ERR_INVALID_ARG;
+        break;
+    }
+    }
+
+    return ret;
+}
+
+static esp_err_t imx298_query_support_formats(esp_cam_sensor_device_t *dev, esp_cam_sensor_format_array_t *formats)
+{
+    ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, dev);
+    ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, formats);
+
+    formats->count = ARRAY_SIZE(imx298_format_info);
+    formats->format_array = &imx298_format_info[0];
+    return ESP_OK;
+}
+
+static esp_err_t imx298_query_support_capability(esp_cam_sensor_device_t *dev, esp_cam_sensor_capability_t *sensor_cap)
+{
+    ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, dev);
+    ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, sensor_cap);
+
+    sensor_cap->fmt_raw = 1;
+    return 0;
+}
+
+static esp_err_t imx298_set_format(esp_cam_sensor_device_t *dev, const esp_cam_sensor_format_t *format)
+{
+    ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, dev);
+    struct imx298_cam *cam_imx298 = (struct imx298_cam *)dev->priv;
+    esp_err_t ret = ESP_OK;
+    /* Depending on the interface type, an available configuration is automatically loaded.
+    You can set the output format of the sensor without using query_format().*/
+    if (format == NULL) {
+        format = &imx298_format_info[CONFIG_CAMERA_IMX298_MIPI_IF_FORMAT_INDEX_DEFAULT];
+    }
+
+    ret = imx298_write_array(dev->sccb_handle, (imx298_reginfo_t *)format->regs);
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Set format regs fail");
+        return ESP_CAM_SENSOR_ERR_FAILED_SET_FORMAT;
+    }
+
+    dev->cur_format = format;
+    // init para
+    cam_imx298->imx298_para.exposure_val = dev->cur_format->isp_info->isp_v1_info.exp_def;
+    cam_imx298->imx298_para.gain_index = dev->cur_format->isp_info->isp_v1_info.gain_def;
+
+    return ret;
+}
+
+static esp_err_t imx298_get_format(esp_cam_sensor_device_t *dev, esp_cam_sensor_format_t *format)
+{
+    ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, dev);
+    ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, format);
+
+    esp_err_t ret = ESP_FAIL;
+
+    if (dev->cur_format != NULL) {
+        memcpy(format, dev->cur_format, sizeof(esp_cam_sensor_format_t));
+        ret = ESP_OK;
+    }
+    return ret;
+}
+
+static esp_err_t imx298_priv_ioctl(esp_cam_sensor_device_t *dev, uint32_t cmd, void *arg)
+{
+    esp_err_t ret = ESP_OK;
+    uint32_t regval;
+    esp_cam_sensor_reg_val_t *sensor_reg;
+    IMX298_IO_MUX_LOCK(mux);
+
+    switch (cmd) {
+    case ESP_CAM_SENSOR_IOC_HW_RESET:
+        ret = imx298_hw_reset(dev);
+        break;
+    case ESP_CAM_SENSOR_IOC_SW_RESET:
+        ret = imx298_soft_reset(dev);
+        break;
+    case ESP_CAM_SENSOR_IOC_S_REG:
+        sensor_reg = (esp_cam_sensor_reg_val_t *)arg;
+        ret = imx298_write(dev->sccb_handle, sensor_reg->regaddr, sensor_reg->value);
+        break;
+    case ESP_CAM_SENSOR_IOC_S_STREAM:
+        ret = imx298_set_stream(dev, *(int *)arg);
+        break;
+    case ESP_CAM_SENSOR_IOC_S_TEST_PATTERN:
+        ret = imx298_set_test_pattern(dev, *(int *)arg);
+        break;
+    case ESP_CAM_SENSOR_IOC_G_REG:
+        sensor_reg = (esp_cam_sensor_reg_val_t *)arg;
+        ret = imx298_read(dev->sccb_handle, sensor_reg->regaddr, &regval);
+        if (ret == ESP_OK) {
+            sensor_reg->value = regval;
+        }
+        break;
+    case ESP_CAM_SENSOR_IOC_G_CHIP_ID:
+        ret = imx298_get_sensor_id(dev, arg);
+        break;
+    default:
+        break;
+    }
+
+    IMX298_IO_MUX_UNLOCK(mux);
+    return ret;
+}
+
+static esp_err_t imx298_power_on(esp_cam_sensor_device_t *dev)
+{
+    esp_err_t ret = ESP_OK;
+
+    if (dev->xclk_pin >= 0) {
+        IMX298_ENABLE_OUT_XCLK(dev->xclk_pin, dev->xclk_freq_hz);
+    }
+
+    if (dev->pwdn_pin >= 0) {
+        gpio_config_t conf = { 0 };
+        conf.pin_bit_mask = 1LL << dev->pwdn_pin;
+        conf.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&conf);
+
+        // carefully, logic is inverted compared to reset pin
+        gpio_set_level(dev->pwdn_pin, 1);
+        delay_ms(10);
+        gpio_set_level(dev->pwdn_pin, 0);
+        delay_ms(10);
+    }
+
+    if (dev->reset_pin >= 0) {
+        gpio_config_t conf = { 0 };
+        conf.pin_bit_mask = 1LL << dev->reset_pin;
+        conf.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&conf);
+
+        gpio_set_level(dev->reset_pin, 0);
+        delay_ms(10);
+        gpio_set_level(dev->reset_pin, 1);
+        delay_ms(10);
+    }
+
+    return ret;
+}
+
+static esp_err_t imx298_power_off(esp_cam_sensor_device_t *dev)
+{
+    esp_err_t ret = ESP_OK;
+
+    if (dev->xclk_pin >= 0) {
+        IMX298_DISABLE_OUT_XCLK(dev->xclk_pin);
+    }
+
+    if (dev->pwdn_pin >= 0) {
+        gpio_set_level(dev->pwdn_pin, 0);
+        delay_ms(10);
+        gpio_set_level(dev->pwdn_pin, 1);
+        delay_ms(10);
+    }
+
+    if (dev->reset_pin >= 0) {
+        gpio_set_level(dev->reset_pin, 1);
+        delay_ms(10);
+        gpio_set_level(dev->reset_pin, 0);
+        delay_ms(10);
+    }
+
+    return ret;
+}
+
+static esp_err_t imx298_delete(esp_cam_sensor_device_t *dev)
+{
+    ESP_LOGD(TAG, "del imx298 (%p)", dev);
+    if (dev) {
+        if (dev->priv) {
+            free(dev->priv);
+            dev->priv = NULL;
+        }
+        free(dev);
+        dev = NULL;
+    }
+
+    return ESP_OK;
+}
+
+static const esp_cam_sensor_ops_t imx298_ops = {
+    .query_para_desc = imx298_query_para_desc,
+    .get_para_value = imx298_get_para_value,
+    .set_para_value = imx298_set_para_value,
+    .query_support_formats = imx298_query_support_formats,
+    .query_support_capability = imx298_query_support_capability,
+    .set_format = imx298_set_format,
+    .get_format = imx298_get_format,
+    .priv_ioctl = imx298_priv_ioctl,
+    .del = imx298_delete
+};
+
+esp_cam_sensor_device_t *imx298_detect(esp_cam_sensor_config_t *config)
+{
+    esp_cam_sensor_device_t *dev = NULL;
+    struct imx298_cam *cam_imx298;
+    s_limited_abs_gain_index = ARRAY_SIZE(imx298_abs_gain_val_map);
+    if (config == NULL) {
+        return NULL;
+    }
+
+    dev = calloc(1, sizeof(esp_cam_sensor_device_t));
+    if (dev == NULL) {
+        ESP_LOGE(TAG, "No memory for camera");
+        return NULL;
+    }
+
+    cam_imx298 = heap_caps_calloc(1, sizeof(struct imx298_cam), MALLOC_CAP_DEFAULT);
+    if (!cam_imx298) {
+        ESP_LOGE(TAG, "failed to calloc cam");
+        free(dev);
+        return NULL;
+    }
+
+    dev->name = (char *)IMX298_SENSOR_NAME;
+    dev->sccb_handle = config->sccb_handle;
+    dev->xclk_pin = config->xclk_pin;
+    dev->reset_pin = config->reset_pin;
+    dev->pwdn_pin = config->pwdn_pin;
+    dev->sensor_port = config->sensor_port;
+    dev->ops = &imx298_ops;
+    dev->priv = cam_imx298;
+    dev->cur_format = &imx298_format_info[CONFIG_CAMERA_IMX298_MIPI_IF_FORMAT_INDEX_DEFAULT];
+    for (size_t i = 0; i < ARRAY_SIZE(imx298_abs_gain_val_map); i++) {
+        if (imx298_abs_gain_val_map[i] > s_limited_abs_gain) {
+            s_limited_abs_gain_index = i - 1;
+            break;
+        }
+    }
+
+    // Configure sensor power, clock, and SCCB port
+    if (imx298_power_on(dev) != ESP_OK) {
+        ESP_LOGE(TAG, "Camera power on failed");
+        goto err_free_handler;
+    }
+
+    if (imx298_get_sensor_id(dev, &dev->id) != ESP_OK) {
+        ESP_LOGE(TAG, "Get sensor ID failed");
+        goto err_free_handler;
+    } else if (dev->id.pid != IMX298_PID) {
+        ESP_LOGE(TAG, "Camera sensor is not IMX298, PID=0x%x", dev->id.pid);
+        goto err_free_handler;
+    }
+    ESP_LOGI(TAG, "Detected Camera sensor PID=0x%x", dev->id.pid);
+
+    return dev;
+
+err_free_handler:
+    imx298_power_off(dev);
+    free(dev->priv);
+    free(dev);
+
+    return NULL;
+}
+
+#if CONFIG_CAMERA_IMX298_AUTO_DETECT_MIPI_INTERFACE_SENSOR
+ESP_CAM_SENSOR_DETECT_FN(imx298_detect, ESP_CAM_SENSOR_MIPI_CSI, IMX298_SCCB_ADDR)
+{
+    ((esp_cam_sensor_config_t *)config)->sensor_port = ESP_CAM_SENSOR_MIPI_CSI;
+    return imx298_detect(config);
+}
+#endif
