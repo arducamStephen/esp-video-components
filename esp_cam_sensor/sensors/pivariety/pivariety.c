@@ -13,21 +13,21 @@
 
 #include "esp_cam_sensor.h"
 #include "esp_cam_sensor_detect.h"
-#include "imx298_settings.h"
+#include "pivariety_settings.h"
 #include "v4l2_cid.h"
-#include "imx298.h"
+#include "pivariety.h"
 
 /*
- * IMX298 camera sensor gain control.
+ * PIVARIETY camera sensor gain control.
  * Note1: The analog gain only has coarse gain, and no fine gain, so in the adjustment of analog gain.
  * Digital gain needs to replace analog fine gain for smooth transition, so as to avoid AGC oscillation.
- * Note2: the analog gain of IMX298 will be affected by temperature, it is recommended to increase Dgain first and then Again.
+ * Note2: the analog gain of PIVARIETY will be affected by temperature, it is recommended to increase Dgain first and then Again.
  */
 typedef struct {
     uint8_t dgain_fine; // digital gain fine
     uint8_t dgain_coarse; // digital gain coarse
     uint8_t analog_gain;
-} imx298_gain_t;
+} pivariety_gain_t;
 
 typedef struct {
     uint32_t exposure_val;
@@ -35,34 +35,34 @@ typedef struct {
 
     uint32_t vflip_en : 1;
     uint32_t hmirror_en : 1;
-} imx298_para_t;
+} pivariety_para_t;
 
-struct imx298_cam {
-    imx298_para_t imx298_para;
+struct pivariety_cam {
+    pivariety_para_t pivariety_para;
 };
 
-#define IMX298_IO_MUX_LOCK(mux)
-#define IMX298_IO_MUX_UNLOCK(mux)
-#define IMX298_ENABLE_OUT_XCLK(pin,clk)
-#define IMX298_DISABLE_OUT_XCLK(pin)
+#define PIVARIETY_IO_MUX_LOCK(mux)
+#define PIVARIETY_IO_MUX_UNLOCK(mux)
+#define PIVARIETY_ENABLE_OUT_XCLK(pin,clk)
+#define PIVARIETY_DISABLE_OUT_XCLK(pin)
 
-#define IMX298_FETCH_EXP_H(val)     (((val) >> 12) & 0xF)
-#define IMX298_FETCH_EXP_M(val)     (((val) >> 4) & 0xFF)
-#define IMX298_FETCH_EXP_L(val)     (((val) & 0xF) << 4)
+#define PIVARIETY_FETCH_EXP_H(val)     (((val) >> 12) & 0xF)
+#define PIVARIETY_FETCH_EXP_M(val)     (((val) >> 4) & 0xFF)
+#define PIVARIETY_FETCH_EXP_L(val)     (((val) & 0xF) << 4)
 
 #ifndef portTICK_RATE_MS
 #define portTICK_RATE_MS portTICK_PERIOD_MS
 #endif
 #define delay_ms(ms)  vTaskDelay((ms > portTICK_PERIOD_MS ? ms/ portTICK_PERIOD_MS : 1))
-#define IMX298_SUPPORT_NUM CONFIG_CAMERA_IMX298_MAX_SUPPORT
+#define PIVARIETY_SUPPORT_NUM CONFIG_CAMERA_PIVARIETY_MAX_SUPPORT
 
-static const uint32_t s_limited_abs_gain = CONFIG_CAMERA_IMX298_ABSOLUTE_GAIN_LIMIT;
+static const uint32_t s_limited_abs_gain = CONFIG_CAMERA_PIVARIETY_ABSOLUTE_GAIN_LIMIT;
 static size_t s_limited_abs_gain_index;
-static const char *TAG = "imx298";
+static const char *TAG = "pivariety";
 
-#if CONFIG_CAMERA_IMX298_ANA_GAIN_PRIORITY
+#if CONFIG_CAMERA_PIVARIETY_ANA_GAIN_PRIORITY
 // total gain = analog_gain x digital_gain x 1000(To avoid decimal points, the final abs_gain is multiplied by 1000.)
-static const uint32_t imx298_abs_gain_val_map[] = {
+static const uint32_t pivariety_abs_gain_val_map[] = {
     1000,
     1031,
     1063,
@@ -262,8 +262,8 @@ static const uint32_t imx298_abs_gain_val_map[] = {
     63008,
 };
 
-// IMX298 Gain map format: [DIG_FINE, DIG_COARSE, ANG]
-static const imx298_gain_t imx298_gain_map[] = {
+// PIVARIETY Gain map format: [DIG_FINE, DIG_COARSE, ANG]
+static const pivariety_gain_t pivariety_gain_map[] = {
     {0x80, 0x00, 0x00},
     {0x84, 0x00, 0x00},
     {0x88, 0x00, 0x00},
@@ -462,9 +462,9 @@ static const imx298_gain_t imx298_gain_map[] = {
     {0xf8, 0x01, 0x0f},
     {0xfc, 0x01, 0x0f},
 };
-#elif CONFIG_CAMERA_IMX298_DIG_GAIN_PRIORITY
+#elif CONFIG_CAMERA_PIVARIETY_DIG_GAIN_PRIORITY
 // total gain = analog_gain x digital_gain x 1000(To avoid decimal points, the final abs_gain is multiplied by 1000.)
-static const uint32_t imx298_abs_gain_val_map[] = {
+static const uint32_t pivariety_abs_gain_val_map[] = {
     1000,
     1031,
     1063,
@@ -664,8 +664,8 @@ static const uint32_t imx298_abs_gain_val_map[] = {
     63008,
 };
 
-// IMX298 Gain map format: [DIG_FINE, DIG_COARSE, ANG]
-static const imx298_gain_t imx298_gain_map[] = {
+// PIVARIETY Gain map format: [DIG_FINE, DIG_COARSE, ANG]
+static const pivariety_gain_t pivariety_gain_map[] = {
     {0x80, 0x00, 0x00},
     {0x84, 0x00, 0x00},
     {0x88, 0x00, 0x00},
@@ -866,7 +866,7 @@ static const imx298_gain_t imx298_gain_map[] = {
 };
 #endif // end CONFIG_ANA_GAIN_PRIORITY
 
-static const esp_cam_sensor_isp_info_t imx298_isp_info[] = {
+static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
 
     {
         .isp_v1_info = {
@@ -879,69 +879,136 @@ static const esp_cam_sensor_isp_info_t imx298_isp_info[] = {
             .exp_def = 0x4dc, // depend on {0x3e00, 0x3e01, 0x3e02}, see format_reg_list to get the default value.
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
         }
-    }
-
+    },
+    {
+        .isp_v1_info = {
+            .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
+            .pclk = 72000000,
+            .vts = 1250,
+            .hts = 1920,
+            .tline_ns = 26666,
+            .gain_def = 0, // gain index, depend on {0x3e06, 0x3e07, 0x3e09}, since these registers are not set in format reg_list, the default values ​​are used here.
+            .exp_def = 0x4dc, // depend on {0x3e00, 0x3e01, 0x3e02}, see format_reg_list to get the default value.
+            .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
+        }
+    },
+    {
+        .isp_v1_info = {
+            .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
+            .pclk = 744000000,
+            .vts = 2968,    //4167,
+            .hts = 4700,    //2976,
+            .gain_def = 1,
+            .exp_def = 0x5d6,
+            .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
+        }
+    },
+    {
+        .isp_v1_info = {
+            .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
+            .pclk = 744000000,
+            .vts = 8904,    //2968,
+            .hts = 9400,
+            .gain_def = 1,
+            .exp_def = 0x207,
+            .bayer_type = ESP_CAM_SENSOR_BAYER_BGGR,
+        }
+    },
 };
 
-static const esp_cam_sensor_format_t imx298_format_info[] = {
-
-    //      {
-    //     .name = "MIPI_1lane_24Minput_RAW8_1280x720_30fps",
-    //     .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
-    //     .port = ESP_CAM_SENSOR_MIPI_CSI,
-    //     .xclk = 24000000,
-    //     .width = 1280,
-    //     .height = 720,
-    //     .regs = init_reglist_MIPI_1lane_raw10_1280x720_30fps,
-    //     .regs_size = ARRAY_SIZE(init_reglist_MIPI_1lane_raw10_1280x720_30fps),
-    //     .fps = 30,
-    //     .isp_info = &sc202cs_isp_info[0],
-    //     .mipi_info = {
-    //         .mipi_clk = 576000000,
-    //         .lane_num = 2,
-    //         .line_sync_en = false,
-    //     },
-    //     .reserved = NULL,
-    // },
-  
+static const esp_cam_sensor_format_t pivariety_format_info[] = {
     {
         .name = "MIPI_2lane_24Minput_RAW10_1600x1200_30fps",
         .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
         .port = ESP_CAM_SENSOR_MIPI_CSI,
         .xclk = 24000000,
-        .width = 1280,
-        .height = 720,
-        .regs = imx298_MIPI_2lane_raw10_1280x720_30fps,
-        .regs_size = ARRAY_SIZE(imx298_MIPI_2lane_raw10_1280x720_30fps),
+        .width = 1600,
+        .height = 1200,
+        .regs = pivariety_MIPI_2lane_raw10_1600x1200_30fps,
+        .regs_size = ARRAY_SIZE(pivariety_MIPI_2lane_raw10_1600x1200_30fps),
         .fps = 30,
-        .isp_info = &imx298_isp_info[0],
+        .isp_info = &pivariety_isp_info[1],
         .mipi_info = {
             .mipi_clk = 912000000,
             .lane_num = 2,
             .line_sync_en = false,
         },
         .reserved = NULL,
-    }
+    },
+    {
+        .name = "MIPI_2lane_24Minput_RAW10_1280x720_30fps",
+        .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
+        .port = ESP_CAM_SENSOR_MIPI_CSI,
+        .xclk = 24000000,
+        .width = 1280,
+        .height = 720,
+        .regs = pivariety_MIPI_2lane_raw10_1280x720_30fps,
+        .regs_size = ARRAY_SIZE(pivariety_MIPI_2lane_raw10_1280x720_30fps),
+        .fps = 30,
+        .isp_info = &pivariety_isp_info[0],
+        .mipi_info = {
+            .mipi_clk = 912000000,
+            .lane_num = 2,
+            .line_sync_en = false,
+        },
+        .reserved = NULL,
+    },
+    {
+        .name = "MIPI_2lane_24Minput_RAW8_1024x600_30fps",
+        .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
+        .port = ESP_CAM_SENSOR_MIPI_CSI,
+        .xclk = 24000000,
+        .width = 1024,
+        .height = 600,
+        .regs = pivariety_MIPI_2lane_raw10_1024x600_30fps,
+        .regs_size = ARRAY_SIZE(pivariety_MIPI_2lane_raw10_1024x600_30fps),
+        .fps = 10,
+        .isp_info = &pivariety_isp_info[2],
+        .mipi_info = {
+            .mipi_clk = 888000000,
+            .lane_num = 2,
+            .line_sync_en = false,
+        },
+        .reserved = NULL,
+    },
+    {
+        .name = "MIPI_2lane_24Minput_RAW10_640x480_30fps",
+        .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
+        .port = ESP_CAM_SENSOR_MIPI_CSI,
+        .xclk = 24000000,
+        .width = 640,
+        .height = 480,
+        .regs = pivariety_MIPI_2lane_raw10_640x480_30fps,
+        .regs_size = ARRAY_SIZE(pivariety_MIPI_2lane_raw10_640x480_30fps),
+        .fps = 60,
+        .isp_info = &pivariety_isp_info[3],
+        .mipi_info = {
+            .mipi_clk = 888000000,
+            .lane_num = 2,
+            .line_sync_en = false,
+        },
+        .reserved = NULL,
+    },
 };
 
-static esp_err_t imx298_read(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint32_t *read_buf)
+static esp_err_t pivariety_read(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint32_t *read_buf)
 {
     return esp_sccb_transmit_receive_reg_a16v32(sccb_handle, reg, read_buf);
 }
 
-static esp_err_t imx298_write(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint32_t data)
+static esp_err_t pivariety_write(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint32_t data)
 {
     return esp_sccb_transmit_reg_a16v32(sccb_handle, reg, data);
 }
 
 /* write a array of registers  */
-static esp_err_t imx298_write_array(esp_sccb_io_handle_t sccb_handle, imx298_reginfo_t *regarray)
+static esp_err_t pivariety_write_array(esp_sccb_io_handle_t sccb_handle, pivariety_reginfo_t *regarray)
 {
     int i = 0;
     esp_err_t ret = ESP_OK;
-    while ((ret == ESP_OK) && regarray[i].reg != IMX298_REG_END) {
-        if (regarray[i].reg != IMX298_REG_DELAY) {
-            ret = imx298_write(sccb_handle, regarray[i].reg, regarray[i].val);
+    while ((ret == ESP_OK) && regarray[i].reg != PIVARIETY_REG_END) {
+        if (regarray[i].reg != PIVARIETY_REG_DELAY) {
+            ret = pivariety_write(sccb_handle, regarray[i].reg, regarray[i].val);
         } else {
             delay_ms(regarray[i].val);
         }
@@ -950,27 +1017,27 @@ static esp_err_t imx298_write_array(esp_sccb_io_handle_t sccb_handle, imx298_reg
     return ret;
 }
 
-static esp_err_t imx298_set_reg_bits(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint8_t offset, uint8_t length, uint8_t value)
+static esp_err_t pivariety_set_reg_bits(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint8_t offset, uint8_t length, uint8_t value)
 {
     esp_err_t ret = ESP_OK;
     // uint8_t reg_data = 0;
 
-    // ret = imx298_read(sccb_handle, reg, &reg_data);
+    // ret = pivariety_read(sccb_handle, reg, &reg_data);
     // if (ret != ESP_OK) {
     //     return ret;
     // }
     // uint8_t mask = ((1 << length) - 1) << offset;
     // value = (reg_data & ~mask) | ((value << offset) & mask);
-    // ret = imx298_write(sccb_handle, reg, value);
+    // ret = pivariety_write(sccb_handle, reg, value);
     return ret;
 }
 
-static esp_err_t imx298_set_test_pattern(esp_cam_sensor_device_t *dev, int enable)
+static esp_err_t pivariety_set_test_pattern(esp_cam_sensor_device_t *dev, int enable)
 {
-    return imx298_set_reg_bits(dev->sccb_handle, 0x4501, 3, 1, enable ? 0x01 : 0x00);
+    return pivariety_set_reg_bits(dev->sccb_handle, 0x4501, 3, 1, enable ? 0x01 : 0x00);
 }
 
-static esp_err_t imx298_hw_reset(esp_cam_sensor_device_t *dev)
+static esp_err_t pivariety_hw_reset(esp_cam_sensor_device_t *dev)
 {
     // if (dev->reset_pin >= 0) {
     //     gpio_set_level(dev->reset_pin, 0);
@@ -981,49 +1048,49 @@ static esp_err_t imx298_hw_reset(esp_cam_sensor_device_t *dev)
     return ESP_OK;
 }
 
-static esp_err_t imx298_soft_reset(esp_cam_sensor_device_t *dev)
+static esp_err_t pivariety_soft_reset(esp_cam_sensor_device_t *dev)
 {
     esp_err_t ret = ESP_OK;
-    // esp_err_t ret = imx298_set_reg_bits(dev->sccb_handle, 0x0103, 0, 1, 0x01);
+    // esp_err_t ret = pivariety_set_reg_bits(dev->sccb_handle, 0x0103, 0, 1, 0x01);
     // delay_ms(5);
     return ret;
 }
 
-static esp_err_t imx298_get_sensor_id(esp_cam_sensor_device_t *dev, esp_cam_sensor_id_t *id)
+static esp_err_t pivariety_get_sensor_id(esp_cam_sensor_device_t *dev, esp_cam_sensor_id_t *id)
 {
     esp_err_t ret = ESP_FAIL;
-    uint32_t pid_h;
+    uint32_t pid;
 
-    ret = imx298_read(dev->sccb_handle, SENSOR_ID_REG, &pid_h);
+    ret = pivariety_read(dev->sccb_handle, DEVICE_ID_REG, &pid);
     if (ret != ESP_OK) {
         return ret;
     }
-    id->pid = pid_h ;
+    id->pid = pid ;
 
     return ret;
 }
 
-static esp_err_t imx298_set_stream(esp_cam_sensor_device_t *dev, int enable)
+static esp_err_t pivariety_set_stream(esp_cam_sensor_device_t *dev, int enable)
 {
     esp_err_t ret = ESP_FAIL;
-    ret = imx298_write(dev->sccb_handle, STREAM_ON, enable ? 0x01 : 0x00);
+    ret = pivariety_write(dev->sccb_handle, STREAM_ON, enable ? 0x01 : 0x00);
 
     dev->stream_status = enable;
     ESP_LOGD(TAG, "Stream=%d", enable);
     return ret;
 }
 
-static esp_err_t imx298_set_mirror(esp_cam_sensor_device_t *dev, int enable)
+static esp_err_t pivariety_set_mirror(esp_cam_sensor_device_t *dev, int enable)
 {
-    return 0;//imx298_set_reg_bits(dev->sccb_handle, 0x3221, 1, 2, enable ? 0x03 : 0x00);
+    return 0;//pivariety_set_reg_bits(dev->sccb_handle, 0x3221, 1, 2, enable ? 0x03 : 0x00);
 }
 
-static esp_err_t imx298_set_vflip(esp_cam_sensor_device_t *dev, int enable)
+static esp_err_t pivariety_set_vflip(esp_cam_sensor_device_t *dev, int enable)
 {
-    return 0;// imx298_set_reg_bits(dev->sccb_handle, 0x3221, 5, 2, enable ? 0x03 : 0x00);
+    return 0;// pivariety_set_reg_bits(dev->sccb_handle, 0x3221, 5, 2, enable ? 0x03 : 0x00);
 }
 
-static esp_err_t imx298_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam_sensor_param_desc_t *qdesc)
+static esp_err_t pivariety_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam_sensor_param_desc_t *qdesc)
 {
     esp_err_t ret = ESP_OK;
     switch (qdesc->id) {
@@ -1037,7 +1104,7 @@ static esp_err_t imx298_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam_se
     case ESP_CAM_SENSOR_GAIN:
         qdesc->type = ESP_CAM_SENSOR_PARAM_TYPE_ENUMERATION;
         qdesc->enumeration.count = s_limited_abs_gain_index;
-        qdesc->enumeration.elements = imx298_abs_gain_val_map;
+        qdesc->enumeration.elements = pivariety_abs_gain_val_map;
         qdesc->default_value = dev->cur_format->isp_info->isp_v1_info.gain_def; // default gain index
         break;
     case ESP_CAM_SENSOR_VFLIP:
@@ -1057,17 +1124,17 @@ static esp_err_t imx298_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam_se
     return ret;
 }
 
-static esp_err_t imx298_get_para_value(esp_cam_sensor_device_t *dev, uint32_t id, void *arg, size_t size)
+static esp_err_t pivariety_get_para_value(esp_cam_sensor_device_t *dev, uint32_t id, void *arg, size_t size)
 {
     esp_err_t ret = ESP_OK;
-    struct imx298_cam *cam_imx298 = (struct imx298_cam *)dev->priv;
+    struct pivariety_cam *cam_pivariety = (struct pivariety_cam *)dev->priv;
     switch (id) {
     case ESP_CAM_SENSOR_EXPOSURE_VAL: {
-        *(uint32_t *)arg = cam_imx298->imx298_para.exposure_val;
+        *(uint32_t *)arg = cam_pivariety->pivariety_para.exposure_val;
         break;
     }
     case ESP_CAM_SENSOR_GAIN: {
-        *(uint32_t *)arg = cam_imx298->imx298_para.gain_index;
+        *(uint32_t *)arg = cam_pivariety->pivariety_para.gain_index;
         break;
     }
     default: {
@@ -1078,60 +1145,60 @@ static esp_err_t imx298_get_para_value(esp_cam_sensor_device_t *dev, uint32_t id
     return ret;
 }
 
-static esp_err_t imx298_set_para_value(esp_cam_sensor_device_t *dev, uint32_t id, const void *arg, size_t size)
+static esp_err_t pivariety_set_para_value(esp_cam_sensor_device_t *dev, uint32_t id, const void *arg, size_t size)
 {
     esp_err_t ret = ESP_OK;
     uint32_t u32_val = *(uint32_t *)arg;
-    struct imx298_cam *cam_imx298 = (struct imx298_cam *)dev->priv;
+    struct pivariety_cam *cam_pivariety = (struct pivariety_cam *)dev->priv;
 
     switch (id) {
     case ESP_CAM_SENSOR_EXPOSURE_VAL: {
         ESP_LOGD(TAG, "set exposure 0x%" PRIx32, u32_val);
         /* 4 least significant bits of expsoure are fractional part */
-        // ret = imx298_write(dev->sccb_handle,
-        //                     IMX298_REG_SHUTTER_TIME_H,
-        //                     IMX298_FETCH_EXP_H(u32_val));
-        // ret |= imx298_write(dev->sccb_handle,
-        //                      IMX298_REG_SHUTTER_TIME_M,
-        //                      IMX298_FETCH_EXP_M(u32_val));
-        // ret |= imx298_write(dev->sccb_handle,
-        //                      IMX298_REG_SHUTTER_TIME_L,
-        //                      IMX298_FETCH_EXP_L(u32_val));
-    imx298_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_EXPOSURE);
-    imx298_write(dev->sccb_handle, CTRL_VALUE_REG, u32_val);
+        // ret = pivariety_write(dev->sccb_handle,
+        //                     PIVARIETY_REG_SHUTTER_TIME_H,
+        //                     PIVARIETY_FETCH_EXP_H(u32_val));
+        // ret |= pivariety_write(dev->sccb_handle,
+        //                      PIVARIETY_REG_SHUTTER_TIME_M,
+        //                      PIVARIETY_FETCH_EXP_M(u32_val));
+        // ret |= pivariety_write(dev->sccb_handle,
+        //                      PIVARIETY_REG_SHUTTER_TIME_L,
+        //                      PIVARIETY_FETCH_EXP_L(u32_val));
+    pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_EXPOSURE);
+    pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, u32_val);
 
         if (ret == ESP_OK) {
-            cam_imx298->imx298_para.exposure_val = u32_val;
+            cam_pivariety->pivariety_para.exposure_val = u32_val;
         }
         break;
     }
     case ESP_CAM_SENSOR_GAIN: {
-        ESP_LOGD(TAG, "dgain_fine %" PRIx8 ", dgain_coarse %" PRIx8 ", again_coarse %" PRIx8, imx298_gain_map[u32_val].dgain_fine, imx298_gain_map[u32_val].dgain_coarse, imx298_gain_map[u32_val].analog_gain);
-        // ret = imx298_write(dev->sccb_handle,
-        //                     IMX298_REG_DIG_FINE_GAIN,
-        //                     imx298_gain_map[u32_val].dgain_fine);
-        // ret |= imx298_write(dev->sccb_handle,
-        //                      IMX298_REG_DIG_COARSE_GAIN,
-        //                      imx298_gain_map[u32_val].dgain_coarse);
-        // ret |= imx298_write(dev->sccb_handle,
-        //                      IMX298_REG_ANG_GAIN,
-        //                      imx298_gain_map[u32_val].analog_gain);
+        ESP_LOGD(TAG, "dgain_fine %" PRIx8 ", dgain_coarse %" PRIx8 ", again_coarse %" PRIx8, pivariety_gain_map[u32_val].dgain_fine, pivariety_gain_map[u32_val].dgain_coarse, pivariety_gain_map[u32_val].analog_gain);
+        // ret = pivariety_write(dev->sccb_handle,
+        //                     PIVARIETY_REG_DIG_FINE_GAIN,
+        //                     pivariety_gain_map[u32_val].dgain_fine);
+        // ret |= pivariety_write(dev->sccb_handle,
+        //                      PIVARIETY_REG_DIG_COARSE_GAIN,
+        //                      pivariety_gain_map[u32_val].dgain_coarse);
+        // ret |= pivariety_write(dev->sccb_handle,
+        //                      PIVARIETY_REG_ANG_GAIN,
+        //                      pivariety_gain_map[u32_val].analog_gain);
 
-        imx298_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_GAIN);
-        imx298_write(dev->sccb_handle, CTRL_VALUE_REG, imx298_gain_map[u32_val].analog_gain);
+        pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_GAIN);
+        pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, pivariety_gain_map[u32_val].analog_gain);
         if (ret == ESP_OK) {
-            cam_imx298->imx298_para.gain_index = u32_val;
+            cam_pivariety->pivariety_para.gain_index = u32_val;
         }
         break;
     }
     case ESP_CAM_SENSOR_VFLIP: {
         int *value = (int *)arg;
-        ret = imx298_set_vflip(dev, *value);
+        ret = pivariety_set_vflip(dev, *value);
         break;
     }
     case ESP_CAM_SENSOR_HMIRROR: {
         int *value = (int *)arg;
-        ret = imx298_set_mirror(dev, *value);
+        ret = pivariety_set_mirror(dev, *value);
         break;
     }
     default: {
@@ -1144,17 +1211,17 @@ static esp_err_t imx298_set_para_value(esp_cam_sensor_device_t *dev, uint32_t id
     return ret;
 }
 
-static esp_err_t imx298_query_support_formats(esp_cam_sensor_device_t *dev, esp_cam_sensor_format_array_t *formats)
+static esp_err_t pivariety_query_support_formats(esp_cam_sensor_device_t *dev, esp_cam_sensor_format_array_t *formats)
 {
     ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, dev);
     ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, formats);
 
-    formats->count = ARRAY_SIZE(imx298_format_info);
-    formats->format_array = &imx298_format_info[0];
+    formats->count = ARRAY_SIZE(pivariety_format_info);
+    formats->format_array = &pivariety_format_info[0];
     return ESP_OK;
 }
 
-static esp_err_t imx298_query_support_capability(esp_cam_sensor_device_t *dev, esp_cam_sensor_capability_t *sensor_cap)
+static esp_err_t pivariety_query_support_capability(esp_cam_sensor_device_t *dev, esp_cam_sensor_capability_t *sensor_cap)
 {
     ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, dev);
     ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, sensor_cap);
@@ -1163,18 +1230,18 @@ static esp_err_t imx298_query_support_capability(esp_cam_sensor_device_t *dev, e
     return 0;
 }
 
-static esp_err_t imx298_set_format(esp_cam_sensor_device_t *dev, const esp_cam_sensor_format_t *format)
+static esp_err_t pivariety_set_format(esp_cam_sensor_device_t *dev, const esp_cam_sensor_format_t *format)
 {
     ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, dev);
-    struct imx298_cam *cam_imx298 = (struct imx298_cam *)dev->priv;
+    struct pivariety_cam *cam_pivariety = (struct pivariety_cam *)dev->priv;
     esp_err_t ret = ESP_OK;
     /* Depending on the interface type, an available configuration is automatically loaded.
     You can set the output format of the sensor without using query_format().*/
     if (format == NULL) {
-        format = &imx298_format_info[CONFIG_CAMERA_IMX298_MIPI_IF_FORMAT_INDEX_DEFAULT];
+        format = &pivariety_format_info[CONFIG_CAMERA_PIVARIETY_MIPI_IF_FORMAT_INDEX_DEFAULT];
     }
 
-    ret = imx298_write_array(dev->sccb_handle, (imx298_reginfo_t *)format->regs);
+    ret = pivariety_write_array(dev->sccb_handle, (pivariety_reginfo_t *)format->regs);
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Set format regs fail");
@@ -1183,13 +1250,13 @@ static esp_err_t imx298_set_format(esp_cam_sensor_device_t *dev, const esp_cam_s
 
     dev->cur_format = format;
     // init para
-    cam_imx298->imx298_para.exposure_val = dev->cur_format->isp_info->isp_v1_info.exp_def;
-    cam_imx298->imx298_para.gain_index = dev->cur_format->isp_info->isp_v1_info.gain_def;
+    cam_pivariety->pivariety_para.exposure_val = dev->cur_format->isp_info->isp_v1_info.exp_def;
+    cam_pivariety->pivariety_para.gain_index = dev->cur_format->isp_info->isp_v1_info.gain_def;
 
     return ret;
 }
 
-static esp_err_t imx298_get_format(esp_cam_sensor_device_t *dev, esp_cam_sensor_format_t *format)
+static esp_err_t pivariety_get_format(esp_cam_sensor_device_t *dev, esp_cam_sensor_format_t *format)
 {
     ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, dev);
     ESP_CAM_SENSOR_NULL_POINTER_CHECK(TAG, format);
@@ -1203,54 +1270,54 @@ static esp_err_t imx298_get_format(esp_cam_sensor_device_t *dev, esp_cam_sensor_
     return ret;
 }
 
-static esp_err_t imx298_priv_ioctl(esp_cam_sensor_device_t *dev, uint32_t cmd, void *arg)
+static esp_err_t pivariety_priv_ioctl(esp_cam_sensor_device_t *dev, uint32_t cmd, void *arg)
 {
     esp_err_t ret = ESP_OK;
     uint32_t regval;
     esp_cam_sensor_reg_val_t *sensor_reg;
-    IMX298_IO_MUX_LOCK(mux);
+    PIVARIETY_IO_MUX_LOCK(mux);
 
     switch (cmd) {
     case ESP_CAM_SENSOR_IOC_HW_RESET:
-        ret = imx298_hw_reset(dev);
+        ret = pivariety_hw_reset(dev);
         break;
     case ESP_CAM_SENSOR_IOC_SW_RESET:
-        ret = imx298_soft_reset(dev);
+        ret = pivariety_soft_reset(dev);
         break;
     case ESP_CAM_SENSOR_IOC_S_REG:
         sensor_reg = (esp_cam_sensor_reg_val_t *)arg;
-        ret = imx298_write(dev->sccb_handle, sensor_reg->regaddr, sensor_reg->value);
+        ret = pivariety_write(dev->sccb_handle, sensor_reg->regaddr, sensor_reg->value);
         break;
     case ESP_CAM_SENSOR_IOC_S_STREAM:
-        ret = imx298_set_stream(dev, *(int *)arg);
+        ret = pivariety_set_stream(dev, *(int *)arg);
         break;
     case ESP_CAM_SENSOR_IOC_S_TEST_PATTERN:
-        ret = imx298_set_test_pattern(dev, *(int *)arg);
+        ret = pivariety_set_test_pattern(dev, *(int *)arg);
         break;
     case ESP_CAM_SENSOR_IOC_G_REG:
         sensor_reg = (esp_cam_sensor_reg_val_t *)arg;
-        ret = imx298_read(dev->sccb_handle, sensor_reg->regaddr, &regval);
+        ret = pivariety_read(dev->sccb_handle, sensor_reg->regaddr, &regval);
         if (ret == ESP_OK) {
             sensor_reg->value = regval;
         }
         break;
     case ESP_CAM_SENSOR_IOC_G_CHIP_ID:
-        ret = imx298_get_sensor_id(dev, arg);
+        ret = pivariety_get_sensor_id(dev, arg);
         break;
     default:
         break;
     }
 
-    IMX298_IO_MUX_UNLOCK(mux);
+    PIVARIETY_IO_MUX_UNLOCK(mux);
     return ret;
 }
 
-static esp_err_t imx298_power_on(esp_cam_sensor_device_t *dev)
+static esp_err_t pivariety_power_on(esp_cam_sensor_device_t *dev)
 {
     esp_err_t ret = ESP_OK;
 
     if (dev->xclk_pin >= 0) {
-        IMX298_ENABLE_OUT_XCLK(dev->xclk_pin, dev->xclk_freq_hz);
+        PIVARIETY_ENABLE_OUT_XCLK(dev->xclk_pin, dev->xclk_freq_hz);
     }
 
     if (dev->pwdn_pin >= 0) {
@@ -1281,12 +1348,12 @@ static esp_err_t imx298_power_on(esp_cam_sensor_device_t *dev)
     return ret;
 }
 
-static esp_err_t imx298_power_off(esp_cam_sensor_device_t *dev)
+static esp_err_t pivariety_power_off(esp_cam_sensor_device_t *dev)
 {
     esp_err_t ret = ESP_OK;
 
     if (dev->xclk_pin >= 0) {
-        IMX298_DISABLE_OUT_XCLK(dev->xclk_pin);
+        PIVARIETY_DISABLE_OUT_XCLK(dev->xclk_pin);
     }
 
     if (dev->pwdn_pin >= 0) {
@@ -1306,9 +1373,9 @@ static esp_err_t imx298_power_off(esp_cam_sensor_device_t *dev)
     return ret;
 }
 
-static esp_err_t imx298_delete(esp_cam_sensor_device_t *dev)
+static esp_err_t pivariety_delete(esp_cam_sensor_device_t *dev)
 {
-    ESP_LOGD(TAG, "del imx298 (%p)", dev);
+    ESP_LOGD(TAG, "del pivariety (%p)", dev);
     if (dev) {
         if (dev->priv) {
             free(dev->priv);
@@ -1321,23 +1388,23 @@ static esp_err_t imx298_delete(esp_cam_sensor_device_t *dev)
     return ESP_OK;
 }
 
-static const esp_cam_sensor_ops_t imx298_ops = {
-    .query_para_desc = imx298_query_para_desc,
-    .get_para_value = imx298_get_para_value,
-    .set_para_value = imx298_set_para_value,
-    .query_support_formats = imx298_query_support_formats,
-    .query_support_capability = imx298_query_support_capability,
-    .set_format = imx298_set_format,
-    .get_format = imx298_get_format,
-    .priv_ioctl = imx298_priv_ioctl,
-    .del = imx298_delete
+static const esp_cam_sensor_ops_t pivariety_ops = {
+    .query_para_desc = pivariety_query_para_desc,
+    .get_para_value = pivariety_get_para_value,
+    .set_para_value = pivariety_set_para_value,
+    .query_support_formats = pivariety_query_support_formats,
+    .query_support_capability = pivariety_query_support_capability,
+    .set_format = pivariety_set_format,
+    .get_format = pivariety_get_format,
+    .priv_ioctl = pivariety_priv_ioctl,
+    .del = pivariety_delete
 };
 
-esp_cam_sensor_device_t *imx298_detect(esp_cam_sensor_config_t *config)
+esp_cam_sensor_device_t *pivariety_detect(esp_cam_sensor_config_t *config)
 {
     esp_cam_sensor_device_t *dev = NULL;
-    struct imx298_cam *cam_imx298;
-    s_limited_abs_gain_index = ARRAY_SIZE(imx298_abs_gain_val_map);
+    struct pivariety_cam *cam_pivariety;
+    s_limited_abs_gain_index = ARRAY_SIZE(pivariety_abs_gain_val_map);
     if (config == NULL) {
         return NULL;
     }
@@ -1348,40 +1415,40 @@ esp_cam_sensor_device_t *imx298_detect(esp_cam_sensor_config_t *config)
         return NULL;
     }
 
-    cam_imx298 = heap_caps_calloc(1, sizeof(struct imx298_cam), MALLOC_CAP_DEFAULT);
-    if (!cam_imx298) {
+    cam_pivariety = heap_caps_calloc(1, sizeof(struct pivariety_cam), MALLOC_CAP_DEFAULT);
+    if (!cam_pivariety) {
         ESP_LOGE(TAG, "failed to calloc cam");
         free(dev);
         return NULL;
     }
 
-    dev->name = (char *)IMX298_SENSOR_NAME;
+    dev->name = (char *)PIVARIETY_SENSOR_NAME;
     dev->sccb_handle = config->sccb_handle;
     dev->xclk_pin = config->xclk_pin;
     dev->reset_pin = config->reset_pin;
     dev->pwdn_pin = config->pwdn_pin;
     dev->sensor_port = config->sensor_port;
-    dev->ops = &imx298_ops;
-    dev->priv = cam_imx298;
-    dev->cur_format = &imx298_format_info[CONFIG_CAMERA_IMX298_MIPI_IF_FORMAT_INDEX_DEFAULT];
-    for (size_t i = 0; i < ARRAY_SIZE(imx298_abs_gain_val_map); i++) {
-        if (imx298_abs_gain_val_map[i] > s_limited_abs_gain) {
+    dev->ops = &pivariety_ops;
+    dev->priv = cam_pivariety;
+    dev->cur_format = &pivariety_format_info[CONFIG_CAMERA_PIVARIETY_MIPI_IF_FORMAT_INDEX_DEFAULT];
+    for (size_t i = 0; i < ARRAY_SIZE(pivariety_abs_gain_val_map); i++) {
+        if (pivariety_abs_gain_val_map[i] > s_limited_abs_gain) {
             s_limited_abs_gain_index = i - 1;
             break;
         }
     }
 
     // Configure sensor power, clock, and SCCB port
-    if (imx298_power_on(dev) != ESP_OK) {
+    if (pivariety_power_on(dev) != ESP_OK) {
         ESP_LOGE(TAG, "Camera power on failed");
         goto err_free_handler;
     }
 
-    if (imx298_get_sensor_id(dev, &dev->id) != ESP_OK) {
+    if (pivariety_get_sensor_id(dev, &dev->id) != ESP_OK) {
         ESP_LOGE(TAG, "Get sensor ID failed");
         goto err_free_handler;
-    } else if (dev->id.pid != IMX298_PID) {
-        ESP_LOGE(TAG, "Camera sensor is not IMX298, PID=0x%x", dev->id.pid);
+    } else if (dev->id.pid != PIVARIETY_PID) {
+        ESP_LOGE(TAG, "Camera sensor is not PIVARIETY, PID=0x%x", dev->id.pid);
         goto err_free_handler;
     }
     ESP_LOGI(TAG, "Detected Camera sensor PID=0x%x", dev->id.pid);
@@ -1389,17 +1456,17 @@ esp_cam_sensor_device_t *imx298_detect(esp_cam_sensor_config_t *config)
     return dev;
 
 err_free_handler:
-    imx298_power_off(dev);
+    pivariety_power_off(dev);
     free(dev->priv);
     free(dev);
 
     return NULL;
 }
 
-#if CONFIG_CAMERA_IMX298_AUTO_DETECT_MIPI_INTERFACE_SENSOR
-ESP_CAM_SENSOR_DETECT_FN(imx298_detect, ESP_CAM_SENSOR_MIPI_CSI, IMX298_SCCB_ADDR)
+#if CONFIG_CAMERA_PIVARIETY_AUTO_DETECT_MIPI_INTERFACE_SENSOR
+ESP_CAM_SENSOR_DETECT_FN(pivariety_detect, ESP_CAM_SENSOR_MIPI_CSI, PIVARIETY_SCCB_ADDR)
 {
     ((esp_cam_sensor_config_t *)config)->sensor_port = ESP_CAM_SENSOR_MIPI_CSI;
-    return imx298_detect(config);
+    return pivariety_detect(config);
 }
 #endif

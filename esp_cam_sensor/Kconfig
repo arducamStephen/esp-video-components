@@ -20,7 +20,7 @@ menu "Espressif Camera Sensors Configurations"
             rsource "sensors/sc101iot/Kconfig.sc101iot"
             rsource "sensors/sc202cs/Kconfig.sc202cs"
             rsource "sensors/sc2336/Kconfig.sc2336"
-            rsource "sensors/imx298/Kconfig.imx298"
+            rsource "sensors/pivariety/Kconfig.pivariety"
         endmenu
 
         config CAMERA_SENSOR_SWAP_PIXEL_BYTE_ORDER

@@ -46,10 +46,10 @@ if(CONFIG_CAMERA_SC202CS)
     list(APPEND priv_include_dirs "sensors/sc202cs/private_include")
 endif()
 
-if(CONFIG_CAMERA_IMX298)
-    list(APPEND srcs "sensors/imx298/imx298.c")
-    list(APPEND include_dirs "sensors/imx298/include")
-    list(APPEND priv_include_dirs "sensors/imx298/private_include")
+if(CONFIG_CAMERA_PIVARIETY)
+    list(APPEND srcs "sensors/pivariety/pivariety.c")
+    list(APPEND include_dirs "sensors/pivariety/include")
+    list(APPEND priv_include_dirs "sensors/pivariety/private_include")
 endif()
 
 if(CONFIG_CAMERA_GC0308)
@@ -163,8 +163,8 @@ if(CONFIG_CAMERA_SC2336_AUTO_DETECT_MIPI_INTERFACE_SENSOR OR CONFIG_CAMERA_SC233
     target_link_libraries(${COMPONENT_LIB} INTERFACE "-u sc2336_detect")
 endif()
 
-if(CONFIG_CAMERA_IMX298_AUTO_DETECT_MIPI_INTERFACE_SENSOR OR CONFIG_CAMERA_IMX298_AUTO_DETECT_DVP_INTERFACE_SENSOR)
-    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u imx298_detect")
+if(CONFIG_CAMERA_PIVARIETY_AUTO_DETECT_MIPI_INTERFACE_SENSOR OR CONFIG_CAMERA_PIVARIETY_AUTO_DETECT_DVP_INTERFACE_SENSOR)
+    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u pivariety_detect")
 endif()
 
 if(CONFIG_CAMERA_SC202CS_AUTO_DETECT_MIPI_INTERFACE_SENSOR)

@@ -13,12 +13,12 @@ extern "C" {
 #endif
 
 /*
- * imx298 camera sensor register type definition.
+ * pivariety camera sensor register type definition.
  */
 typedef struct {
     uint16_t reg;
     uint32_t val;
-} imx298_reginfo_t;
+} pivariety_reginfo_t;
 
 #ifdef __cplusplus
 }

@@ -5,7 +5,7 @@
  */
 
 /*
- * imx298 register definitions.
+ * pivariety register definitions.
  */
 #pragma once
 
@@ -13,10 +13,10 @@
 extern "C" {
 #endif
 
-#define IMX298_REG_END      0xffff
-#define IMX298_REG_DELAY    0xfffe
+#define PIVARIETY_REG_END      0xffff
+#define PIVARIETY_REG_DELAY    0xfffe
 
-/* imx298 registers */
+/* pivariety registers */
 #define STREAM_ON                      0x0100
 #define DEVICE_VERSION_REG             0x0101
 #define SENSOR_ID_REG                  0x0102
@@ -26,19 +26,19 @@ extern "C" {
 #define UNIQUE_ID_REG                  0x0106
 #define SYSTEM_IDLE_REG                0x0107
 
-/* imx298 pixformat registers */
+/* pivariety pixformat registers */
 #define PIXFORMAT_INDEX_REG            0x0200
 #define PIXFORMAT_TYPE_REG             0x0201
 #define BAYER_ORDER_REG                0x0202
 #define MIPI_LANES_REG                 0x0203
 #define FLIPS_DONT_CHANGE_ORDER_REG    0x0204
 
-/* imx298 resolution registers */
+/* pivariety resolution registers */
 #define RESOLUTION_INDEX_REG           0x0300
 #define FORMAT_WIDTH_REG               0x0301
 #define FORMAT_HEIGHT_REG              0x0302
 
-/* imx298 control registers */
+/* pivariety control registers */
 #define CTRL_INDEX_REG                 0x0400
 #define CTRL_ID_REG                    0x0401
 #define CTRL_MIN_REG                   0x0402
