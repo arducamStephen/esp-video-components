@@ -7,6 +7,7 @@
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <sys/stat.h>
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -39,6 +40,7 @@ typedef struct {
 
 struct pivariety_cam {
     pivariety_para_t pivariety_para;
+    struct imx500 *imx500_ai;
 };
 
 #define PIVARIETY_IO_MUX_LOCK(mux)
@@ -59,6 +61,12 @@ struct pivariety_cam {
 static const uint32_t s_limited_abs_gain = CONFIG_CAMERA_PIVARIETY_ABSOLUTE_GAIN_LIMIT;
 static size_t s_limited_abs_gain_index;
 static const char *TAG = "pivariety";
+static esp_sccb_io_handle_t pivariety_sccb_handle = NULL;
+
+extern int imx500_start_streaming(struct imx500 *imx500);
+extern void imx500_stop_streaming(struct imx500 *imx500);
+extern void imx500_calc_inference_lines(struct imx500 *imx500);
+extern int rp2040_gbdg_init(i2c_master_bus_handle_t bus_handle);
 
 //  gain = analog_gain  x 1000(To avoid decimal points, the final abs_gain is multiplied by 1000. total gain = 22.26 times)
 static const uint32_t pivariety_abs_gain_val_map[] = {
@@ -1250,12 +1258,12 @@ static esp_err_t pivariety_set_test_pattern(esp_cam_sensor_device_t *dev, int en
 
 static esp_err_t pivariety_hw_reset(esp_cam_sensor_device_t *dev)
 {
-    // if (dev->reset_pin >= 0) {
-    //     gpio_set_level(dev->reset_pin, 0);
-    //     delay_ms(10);
-    //     gpio_set_level(dev->reset_pin, 1);
-    //     delay_ms(10);
-    // }
+    if (dev->reset_pin >= 0) {
+        gpio_set_level(dev->reset_pin, 0);
+        delay_ms(10);
+        gpio_set_level(dev->reset_pin, 1);
+        delay_ms(10);
+    }
     return ESP_OK;
 }
 
@@ -1283,11 +1291,71 @@ static esp_err_t pivariety_get_sensor_id(esp_cam_sensor_device_t *dev, esp_cam_s
 
 static esp_err_t pivariety_set_stream(esp_cam_sensor_device_t *dev, int enable)
 {
+    // esp_err_t ret = ESP_FAIL;
+    // ret = pivariety_write(dev->sccb_handle, STREAM_ON, enable ? 0x01 : 0x00);
+
+    // dev->stream_status = enable;
+    // ESP_LOGD(TAG, "Stream=%d", enable);
+
+
     esp_err_t ret = ESP_FAIL;
-    ret = pivariety_write(dev->sccb_handle, STREAM_ON, enable ? 0x01 : 0x00);
+    struct imx500 *imx500 = ((struct pivariety_cam *)dev->priv)->imx500_ai;
+    
+
+    if (dev->stream_status == enable) {
+        ESP_LOGI(TAG, "Stream already %d", enable);
+        return ESP_OK;
+    }
+
+#if 0
+    if (imx500->fw_network == NULL) {
+        // char path[128];
+        // // snprintf(path, sizeof(path), "/data/%s", "imx500_network_posenet.rpk");
+        // snprintf(path, sizeof(path), "/data/%s", "imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk");
+
+        // struct stat st;
+        // if (stat(path, &st) != 0) {
+        //     ESP_LOGE(TAG, "stat failed for %s", path);
+        // }
+
+        // size_t size = st.st_size;
+        // uint8_t *data = malloc(size);
+        // if (!data) {
+        //     ESP_LOGE(TAG, "malloc failed");
+        // } 
+    
+        // FILE *f = fopen(path, "rb");
+        // if (!f) {
+        //     ESP_LOGE(TAG, "failed to open %s", path);
+        // } 
+
+        // if (fread(data, 1, size, f) != size) {
+        //     ESP_LOGE(TAG, "fread failed");
+        //     free(data);
+        //     fclose(f);
+        // }
+        // fclose(f);
+
+        imx500->fw_network = imx500_network_posenet_data;//data;
+        imx500->fw_network_size = sizeof(imx500_network_posenet_data);//size;
+        
+        ESP_LOGI(TAG, "read network data=%p, size=%d", imx500_network_posenet_data, sizeof(imx500_network_posenet_data));
+
+        imx500_calc_inference_lines(imx500);
+    }
+#endif
+    
+    // ret = imx500_write(dev->sccb_handle, IMX500_REG_MODE_SEL, enable ? 0x01 : 0x00);
+    if (enable) {
+        ESP_LOGI(TAG, "Start stream");
+        ret = imx500_start_streaming(imx500);
+    } else {
+        ESP_LOGI(TAG, "Stop stream");
+        imx500_stop_streaming(imx500);
+    }
 
     dev->stream_status = enable;
-    ESP_LOGD(TAG, "Stream=%d", enable);
+    ESP_LOGI(TAG, "Stream=%d", enable);
     return ret;
 }
 
@@ -1365,8 +1433,8 @@ static esp_err_t pivariety_set_para_value(esp_cam_sensor_device_t *dev, uint32_t
     switch (id) {
     case ESP_CAM_SENSOR_EXPOSURE_VAL: {
         ESP_LOGD(TAG, "set exposure 0x%" PRIx32, u32_val);
-    pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_EXPOSURE);
-    pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, u32_val);
+        pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_EXPOSURE);
+        pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, u32_val);
 
         if (ret == ESP_OK) {
             cam_pivariety->pivariety_para.exposure_val = u32_val;
@@ -1428,21 +1496,21 @@ static esp_err_t pivariety_set_format(esp_cam_sensor_device_t *dev, const esp_ca
     esp_err_t ret = ESP_OK;
     /* Depending on the interface type, an available configuration is automatically loaded.
     You can set the output format of the sensor without using query_format().*/
-    if (format == NULL) {
-        format = &pivariety_format_info[CONFIG_CAMERA_PIVARIETY_MIPI_IF_FORMAT_INDEX_DEFAULT];
-    }
+    // if (format == NULL) {
+    //     format = &pivariety_format_info[CONFIG_CAMERA_PIVARIETY_MIPI_IF_FORMAT_INDEX_DEFAULT];
+    // }
 
-    ret = pivariety_write_array(dev->sccb_handle, (pivariety_reginfo_t *)format->regs);
+    // ret = pivariety_write_array(dev->sccb_handle, (pivariety_reginfo_t *)format->regs);
 
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Set format regs fail");
-        return ESP_CAM_SENSOR_ERR_FAILED_SET_FORMAT;
-    }
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(TAG, "Set format regs fail");
+    //     return ESP_CAM_SENSOR_ERR_FAILED_SET_FORMAT;
+    // }
 
-    dev->cur_format = format;
-    // init para
-    cam_pivariety->pivariety_para.exposure_val = dev->cur_format->isp_info->isp_v1_info.exp_def;
-    cam_pivariety->pivariety_para.gain_index = dev->cur_format->isp_info->isp_v1_info.gain_def;
+    // dev->cur_format = format;
+    // // init para
+    // cam_pivariety->pivariety_para.exposure_val = dev->cur_format->isp_info->isp_v1_info.exp_def;
+    // cam_pivariety->pivariety_para.gain_index = dev->cur_format->isp_info->isp_v1_info.gain_def;
 
     return ret;
 }
@@ -1595,6 +1663,7 @@ esp_cam_sensor_device_t *pivariety_detect(esp_cam_sensor_config_t *config)
 {
     esp_cam_sensor_device_t *dev = NULL;
     struct pivariety_cam *cam_pivariety;
+    struct imx500 *imx500_ai;
     s_limited_abs_gain_index = ARRAY_SIZE(pivariety_abs_gain_val_map);
     if (config == NULL) {
         return NULL;
@@ -1612,6 +1681,20 @@ esp_cam_sensor_device_t *pivariety_detect(esp_cam_sensor_config_t *config)
         free(dev);
         return NULL;
     }
+
+    imx500_ai = heap_caps_calloc(1, sizeof(struct imx500), MALLOC_CAP_DEFAULT);
+    if (!imx500_ai) {
+        ESP_LOGE(TAG, "failed to calloc imx500_ai");
+        free(cam_pivariety);
+        free(dev);
+        return NULL;
+    }
+
+
+    pivariety_sccb_handle = imx500_ai->sccb_handle = config->sccb_handle;
+    cam_pivariety->imx500_ai = imx500_ai;
+    i2c_master_get_bus_handle(0, &cam_pivariety->imx500_ai->bus_handle);
+    rp2040_gbdg_init(cam_pivariety->imx500_ai->bus_handle);
 
     dev->name = (char *)PIVARIETY_SENSOR_NAME;
     dev->sccb_handle = config->sccb_handle;

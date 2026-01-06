@@ -48,8 +48,13 @@ endif()
 
 if(CONFIG_CAMERA_PIVARIETY)
     list(APPEND srcs "sensors/pivariety/pivariety.c")
+    list(APPEND srcs "sensors/pivariety/rp2040.c")
+    list(APPEND srcs "sensors/pivariety/imx500_ai.c")
+    list(APPEND srcs "sensors/pivariety/earlycpio.c")
+    list(APPEND srcs "sensors/pivariety/md5.c")
     list(APPEND include_dirs "sensors/pivariety/include")
     list(APPEND priv_include_dirs "sensors/pivariety/private_include")
+    list(APPEND priv_include_dirs "sensors/pivariety/private_include/mbedtls")
 endif()
 
 if(CONFIG_CAMERA_GC0308)
