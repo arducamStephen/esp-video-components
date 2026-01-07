@@ -1375,7 +1375,7 @@ static esp_err_t pivariety_set_para_value(esp_cam_sensor_device_t *dev, uint32_t
     }
     case ESP_CAM_SENSOR_GAIN: {
      
-        pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_GAIN);
+        pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_ANALOGUE_GAIN);
         pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, pivariety_abs_gain_val_map[u32_val]);
         if (ret == ESP_OK) {
             cam_pivariety->pivariety_para.gain_index = u32_val;
@@ -1433,6 +1433,7 @@ static esp_err_t pivariety_set_format(esp_cam_sensor_device_t *dev, const esp_ca
     }
 
     ret = pivariety_write_array(dev->sccb_handle, (pivariety_reginfo_t *)format->regs);
+    delay_ms(500);
 
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Set format regs fail");
