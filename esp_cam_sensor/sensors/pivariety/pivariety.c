@@ -1094,8 +1094,8 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = { //1024x600
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 1900800000,
-            .vts = 1802,    //4167,
+            .pclk = 1296000000,//1900800000,
+            .vts = 8904,//1802,    //4167,
             .hts = 18900,    //2976,
             .tline_ns = 9617,
             .gain_def = 500, // gain table index
@@ -1443,7 +1443,7 @@ static esp_err_t pivariety_set_para_value(esp_cam_sensor_device_t *dev, uint32_t
     }
     case ESP_CAM_SENSOR_GAIN: {
      
-        pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_GAIN);
+        pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_ANALOGUE_GAIN);
         pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, pivariety_abs_gain_val_map[u32_val]);
         if (ret == ESP_OK) {
             cam_pivariety->pivariety_para.gain_index = u32_val;
