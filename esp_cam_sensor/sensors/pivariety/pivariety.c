@@ -1058,10 +1058,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = {   //1920x1080
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 945000000,
+            .pclk = 837000000,
             .vts = 1436,
             .hts = 19167,
-            .tline_ns = 20282,
+            .tline_ns = 22899,
             .gain_def = 500, // gain table index
             .exp_def = 0x4dc, 
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1070,10 +1070,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = {   //1600x1200
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 945000000,
+            .pclk = 837000000,
             .vts = 1602,
             .hts = 16492,
-            .tline_ns = 17451,
+            .tline_ns = 19703,
             .gain_def = 500, // gain table index
             .exp_def = 0x4dc, 
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1082,10 +1082,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = { //1280x720
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 1900800000,
+            .pclk = 837000000,
             .vts = 1602,
             .hts = 17900,
-            .tline_ns = 9417,
+            .tline_ns = 21385,
             .gain_def = 500, // gain table index
             .exp_def = 1000, 
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1094,10 +1094,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = { //1024x600
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 1296000000,//1900800000,
-            .vts = 8904,//1802,    //4167,
-            .hts = 18900,    //2976,
-            .tline_ns = 9617,
+            .pclk = 837000000,
+            .vts = 2248,
+            .hts = 12518,
+            .tline_ns = 14955,
             .gain_def = 500, // gain table index
             .exp_def = 1000,
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1106,10 +1106,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = { //640x480
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 772200000,
-            .vts = 3138,    //4167,
-            .hts = 8276,    //2976,
-            .tline_ns = 9522,
+            .pclk = 837000000,
+            .vts = 1792,
+            .hts = 7868,
+            .tline_ns = 9400,
             .gain_def = 500, // gain table index
             .exp_def = 1000,
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1173,7 +1173,7 @@ static const esp_cam_sensor_format_t pivariety_format_info[] = {
         .reserved = NULL,
     },
     {
-        .name = "MIPI_2lane_24Minput_RAW8_1024x600_60fps",
+        .name = "MIPI_2lane_24Minput_RAW10_1024x600_60fps",
         .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
         .port = ESP_CAM_SENSOR_MIPI_CSI,
         .xclk = 24000000,
@@ -1191,7 +1191,7 @@ static const esp_cam_sensor_format_t pivariety_format_info[] = {
         .reserved = NULL,
     },
      {
-        .name = "MIPI_2lane_24Minput_RAW8_640x480_120fps",
+        .name = "MIPI_2lane_24Minput_RAW10_640x480_60fps",
         .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
         .port = ESP_CAM_SENSOR_MIPI_CSI,
         .xclk = 24000000,
@@ -1199,7 +1199,7 @@ static const esp_cam_sensor_format_t pivariety_format_info[] = {
         .height = 480,
         .regs = pivariety_MIPI_2lane_raw10_640x480_120fps,
         .regs_size = ARRAY_SIZE(pivariety_MIPI_2lane_raw10_640x480_120fps),
-        .fps = 30,
+        .fps = 60,
         .isp_info = &pivariety_isp_info[4],
         .mipi_info = {
             .mipi_clk = 640000000,
@@ -1496,21 +1496,21 @@ static esp_err_t pivariety_set_format(esp_cam_sensor_device_t *dev, const esp_ca
     esp_err_t ret = ESP_OK;
     /* Depending on the interface type, an available configuration is automatically loaded.
     You can set the output format of the sensor without using query_format().*/
-    // if (format == NULL) {
-    //     format = &pivariety_format_info[CONFIG_CAMERA_PIVARIETY_MIPI_IF_FORMAT_INDEX_DEFAULT];
-    // }
+    if (format == NULL) {
+        format = &pivariety_format_info[CONFIG_CAMERA_PIVARIETY_MIPI_IF_FORMAT_INDEX_DEFAULT];
+    }
 
-    // ret = pivariety_write_array(dev->sccb_handle, (pivariety_reginfo_t *)format->regs);
+    ret = pivariety_write_array(dev->sccb_handle, (pivariety_reginfo_t *)format->regs);
 
-    // if (ret != ESP_OK) {
-    //     ESP_LOGE(TAG, "Set format regs fail");
-    //     return ESP_CAM_SENSOR_ERR_FAILED_SET_FORMAT;
-    // }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Set format regs fail");
+        return ESP_CAM_SENSOR_ERR_FAILED_SET_FORMAT;
+    }
 
-    // dev->cur_format = format;
-    // // init para
-    // cam_pivariety->pivariety_para.exposure_val = dev->cur_format->isp_info->isp_v1_info.exp_def;
-    // cam_pivariety->pivariety_para.gain_index = dev->cur_format->isp_info->isp_v1_info.gain_def;
+    dev->cur_format = format;
+    // init para
+    cam_pivariety->pivariety_para.exposure_val = dev->cur_format->isp_info->isp_v1_info.exp_def;
+    cam_pivariety->pivariety_para.gain_index = dev->cur_format->isp_info->isp_v1_info.gain_def;
 
     return ret;
 }
