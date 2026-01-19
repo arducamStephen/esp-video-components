@@ -7,6 +7,7 @@
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <sys/stat.h>
 #include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -39,6 +40,7 @@ typedef struct {
 
 struct pivariety_cam {
     pivariety_para_t pivariety_para;
+    struct imx500 *imx500_ai;
 };
 
 #define PIVARIETY_IO_MUX_LOCK(mux)
@@ -59,6 +61,12 @@ struct pivariety_cam {
 static const uint32_t s_limited_abs_gain = CONFIG_CAMERA_PIVARIETY_ABSOLUTE_GAIN_LIMIT;
 static size_t s_limited_abs_gain_index;
 static const char *TAG = "pivariety";
+static esp_sccb_io_handle_t pivariety_sccb_handle = NULL;
+
+extern int imx500_start_streaming(struct imx500 *imx500);
+extern void imx500_stop_streaming(struct imx500 *imx500);
+extern void imx500_calc_inference_lines(struct imx500 *imx500);
+extern int rp2040_gbdg_init(i2c_master_bus_handle_t bus_handle);
 
 //  gain = analog_gain  x 1000(To avoid decimal points, the final abs_gain is multiplied by 1000. total gain = 22.26 times)
 static const uint32_t pivariety_abs_gain_val_map[] = {
@@ -1050,10 +1058,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = {   //1920x1080
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 945000000,
+            .pclk = 837000000,
             .vts = 1436,
             .hts = 19167,
-            .tline_ns = 20282,
+            .tline_ns = 22899,
             .gain_def = 500, // gain table index
             .exp_def = 0x4dc, 
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1062,10 +1070,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = {   //1600x1200
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 945000000,
+            .pclk = 837000000,
             .vts = 1602,
             .hts = 16492,
-            .tline_ns = 17451,
+            .tline_ns = 19703,
             .gain_def = 500, // gain table index
             .exp_def = 0x4dc, 
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1074,10 +1082,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = { //1280x720
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 1900800000,
+            .pclk = 837000000,
             .vts = 1602,
             .hts = 17900,
-            .tline_ns = 9417,
+            .tline_ns = 21385,
             .gain_def = 500, // gain table index
             .exp_def = 1000, 
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1086,10 +1094,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = { //1024x600
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 1900800000,
-            .vts = 1802,    //4167,
-            .hts = 18900,    //2976,
-            .tline_ns = 9617,
+            .pclk = 837000000,
+            .vts = 2248,
+            .hts = 12518,
+            .tline_ns = 14955,
             .gain_def = 500, // gain table index
             .exp_def = 1000,
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1098,10 +1106,10 @@ static const esp_cam_sensor_isp_info_t pivariety_isp_info[] = {
     {
         .isp_v1_info = { //640x480
             .version = SENSOR_ISP_INFO_VERSION_DEFAULT,
-            .pclk = 772200000,
-            .vts = 3138,    //4167,
-            .hts = 8276,    //2976,
-            .tline_ns = 9522,
+            .pclk = 837000000,
+            .vts = 1792,
+            .hts = 7868,
+            .tline_ns = 9400,
             .gain_def = 500, // gain table index
             .exp_def = 1000,
             .bayer_type = ESP_CAM_SENSOR_BAYER_RGGB,
@@ -1165,7 +1173,7 @@ static const esp_cam_sensor_format_t pivariety_format_info[] = {
         .reserved = NULL,
     },
     {
-        .name = "MIPI_2lane_24Minput_RAW8_1024x600_60fps",
+        .name = "MIPI_2lane_24Minput_RAW10_1024x600_60fps",
         .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
         .port = ESP_CAM_SENSOR_MIPI_CSI,
         .xclk = 24000000,
@@ -1183,7 +1191,7 @@ static const esp_cam_sensor_format_t pivariety_format_info[] = {
         .reserved = NULL,
     },
      {
-        .name = "MIPI_2lane_24Minput_RAW8_640x480_120fps",
+        .name = "MIPI_2lane_24Minput_RAW10_640x480_60fps",
         .format = ESP_CAM_SENSOR_PIXFORMAT_RAW10,
         .port = ESP_CAM_SENSOR_MIPI_CSI,
         .xclk = 24000000,
@@ -1191,7 +1199,7 @@ static const esp_cam_sensor_format_t pivariety_format_info[] = {
         .height = 480,
         .regs = pivariety_MIPI_2lane_raw10_640x480_120fps,
         .regs_size = ARRAY_SIZE(pivariety_MIPI_2lane_raw10_640x480_120fps),
-        .fps = 30,
+        .fps = 60,
         .isp_info = &pivariety_isp_info[4],
         .mipi_info = {
             .mipi_clk = 640000000,
@@ -1250,12 +1258,12 @@ static esp_err_t pivariety_set_test_pattern(esp_cam_sensor_device_t *dev, int en
 
 static esp_err_t pivariety_hw_reset(esp_cam_sensor_device_t *dev)
 {
-    // if (dev->reset_pin >= 0) {
-    //     gpio_set_level(dev->reset_pin, 0);
-    //     delay_ms(10);
-    //     gpio_set_level(dev->reset_pin, 1);
-    //     delay_ms(10);
-    // }
+    if (dev->reset_pin >= 0) {
+        gpio_set_level(dev->reset_pin, 0);
+        delay_ms(10);
+        gpio_set_level(dev->reset_pin, 1);
+        delay_ms(10);
+    }
     return ESP_OK;
 }
 
@@ -1283,11 +1291,71 @@ static esp_err_t pivariety_get_sensor_id(esp_cam_sensor_device_t *dev, esp_cam_s
 
 static esp_err_t pivariety_set_stream(esp_cam_sensor_device_t *dev, int enable)
 {
+    // esp_err_t ret = ESP_FAIL;
+    // ret = pivariety_write(dev->sccb_handle, STREAM_ON, enable ? 0x01 : 0x00);
+
+    // dev->stream_status = enable;
+    // ESP_LOGD(TAG, "Stream=%d", enable);
+
+
     esp_err_t ret = ESP_FAIL;
-    ret = pivariety_write(dev->sccb_handle, STREAM_ON, enable ? 0x01 : 0x00);
+    struct imx500 *imx500 = ((struct pivariety_cam *)dev->priv)->imx500_ai;
+    
+
+    if (dev->stream_status == enable) {
+        ESP_LOGI(TAG, "Stream already %d", enable);
+        return ESP_OK;
+    }
+
+#if 0
+    if (imx500->fw_network == NULL) {
+        // char path[128];
+        // // snprintf(path, sizeof(path), "/data/%s", "imx500_network_posenet.rpk");
+        // snprintf(path, sizeof(path), "/data/%s", "imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk");
+
+        // struct stat st;
+        // if (stat(path, &st) != 0) {
+        //     ESP_LOGE(TAG, "stat failed for %s", path);
+        // }
+
+        // size_t size = st.st_size;
+        // uint8_t *data = malloc(size);
+        // if (!data) {
+        //     ESP_LOGE(TAG, "malloc failed");
+        // } 
+    
+        // FILE *f = fopen(path, "rb");
+        // if (!f) {
+        //     ESP_LOGE(TAG, "failed to open %s", path);
+        // } 
+
+        // if (fread(data, 1, size, f) != size) {
+        //     ESP_LOGE(TAG, "fread failed");
+        //     free(data);
+        //     fclose(f);
+        // }
+        // fclose(f);
+
+        imx500->fw_network = imx500_network_posenet_data;//data;
+        imx500->fw_network_size = sizeof(imx500_network_posenet_data);//size;
+        
+        ESP_LOGI(TAG, "read network data=%p, size=%d", imx500_network_posenet_data, sizeof(imx500_network_posenet_data));
+
+        imx500_calc_inference_lines(imx500);
+    }
+#endif
+    
+    // ret = imx500_write(dev->sccb_handle, IMX500_REG_MODE_SEL, enable ? 0x01 : 0x00);
+    if (enable) {
+        ESP_LOGI(TAG, "Start stream");
+        ret = imx500_start_streaming(imx500);
+    } else {
+        ESP_LOGI(TAG, "Stop stream");
+        imx500_stop_streaming(imx500);
+    }
 
     dev->stream_status = enable;
-    ESP_LOGD(TAG, "Stream=%d", enable);
+    ESP_LOGI(TAG, "Stream=%d", enable);
     return ret;
 }
 
@@ -1365,8 +1433,8 @@ static esp_err_t pivariety_set_para_value(esp_cam_sensor_device_t *dev, uint32_t
     switch (id) {
     case ESP_CAM_SENSOR_EXPOSURE_VAL: {
         ESP_LOGD(TAG, "set exposure 0x%" PRIx32, u32_val);
-    pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_EXPOSURE);
-    pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, u32_val);
+        pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_EXPOSURE);
+        pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, u32_val);
 
         if (ret == ESP_OK) {
             cam_pivariety->pivariety_para.exposure_val = u32_val;
@@ -1596,6 +1664,7 @@ esp_cam_sensor_device_t *pivariety_detect(esp_cam_sensor_config_t *config)
 {
     esp_cam_sensor_device_t *dev = NULL;
     struct pivariety_cam *cam_pivariety;
+    struct imx500 *imx500_ai;
     s_limited_abs_gain_index = ARRAY_SIZE(pivariety_abs_gain_val_map);
     if (config == NULL) {
         return NULL;
@@ -1613,6 +1682,20 @@ esp_cam_sensor_device_t *pivariety_detect(esp_cam_sensor_config_t *config)
         free(dev);
         return NULL;
     }
+
+    imx500_ai = heap_caps_calloc(1, sizeof(struct imx500), MALLOC_CAP_DEFAULT);
+    if (!imx500_ai) {
+        ESP_LOGE(TAG, "failed to calloc imx500_ai");
+        free(cam_pivariety);
+        free(dev);
+        return NULL;
+    }
+
+
+    pivariety_sccb_handle = imx500_ai->sccb_handle = config->sccb_handle;
+    cam_pivariety->imx500_ai = imx500_ai;
+    i2c_master_get_bus_handle(0, &cam_pivariety->imx500_ai->bus_handle);
+    rp2040_gbdg_init(cam_pivariety->imx500_ai->bus_handle);
 
     dev->name = (char *)PIVARIETY_SENSOR_NAME;
     dev->sccb_handle = config->sccb_handle;

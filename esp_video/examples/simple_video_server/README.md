@@ -85,56 +85,17 @@ Navigate to **Espressif Camera Sensors Configurations**:
    idf.py menuconfig
    ```
 
-2. **Configure video buffer settings:**
-   ```
-   Example Configuration  --->
-       (2) Camera video buffer number
-   ```
-   
-   > **Recommendation**: More buffers provide better performance and reduce frame drops but consume more memory. For high-resolution sensors (e.g., 1080P), use 2 buffers.
-
-3. **Set JPEG compression quality:**
-   ```
-   Example Configuration  --->
-       (80) JPEG compression quality (%)
-   ```
-   
-   > **Note**: Not all camera sensors support this setting. If unsupported, the example will automatically select the nearest supported value.
-
-4. **HTTP and mDNS configuration:**
-   ```
-   Example Configuration  --->
-       (123456789000000000000987654321) HTTP part boundary
-       (web-cam) mDNS instance
-       (esp-web) mDNS host name
-   ```
-   
-   > **Recommendation**: Keep these default settings unless you have specific requirements.
-
-5. **Camera sensor interface selection:**
-   
-   The example will initialize all enabled camera sensors and stream their output to clients:
-   
-   ```
-   Example Video Initialization Configuration  --->
-       Select and Set Camera Sensor Interface  --->
-           [*] MIPI-CSI  ---
-           [*] DVP  ---->
-   ```
-
-6. **Shared I2C bus configuration:**
+2. **Shared I2C bus configuration:**
    
    If your camera sensors share the same I2C GPIO pins (such as MIPI-CSI and DVP sensors on the ESP32-P4-Function-EV-Board V1.5):
    
    ```
    Example Video Initialization Configuration  --->
-       [*] Use Pre-initialized SCCB(I2C) Bus for All Camera Sensors And Motors
-           (0) SCCB(I2C) Port Number
-           (8) SCCB(I2C) SCL Pin
-           (7) SCCB(I2C) SDA Pin
+       Select Target Development Board  --->
+           [*] ESP32-P4-Function-EV-Board V1.5
    ```
 
-7. **Select target camera sensors:**
+3. **Select target camera sensors:**
    
    Choose sensors based on your development board:
    
@@ -144,25 +105,33 @@ Navigate to **Espressif Camera Sensors Configurations**:
            Camera Sensor Configuration  --->
                Select and Set Camera Sensor  --->
                    [ ] GC0308  ----
-                   [*] GC2145  --->
-                   [*] OV2640  ---->
+                   [*] PIVARIETY  ---->
    ```
 
-8. **Optimize DVP interface performance:**
+4. **Optimize MIPI interface performance:**
    
-   For better frame rates with DVP interface camera sensors:
+   For better frame rates with MIPI interface camera sensors:
    
    ```
    Component config  --->
        Espressif Camera Sensors Configurations  --->
            Camera Sensor Configuration  --->
                Select and Set Camera Sensor  --->
-                   [*] OV2640  ---->
-                       Select default output format for DVP interface (JPEG 640x480 25fps, DVP 8-bit, 20M input)  --->
-                           ( ) YUV422 640x480 6fps, DVP 8-bit, 20M input
-                           (X) JPEG 640x480 25fps, DVP 8-bit, 20M input
-                           ( ) RGB565 240x240 25fps, DVP 8-bit, 20M input
+                   [*] PIVARIETY  ---->
+                       Select default output format for MIPI CSI interface (RAW10 1920X1080 30fps, MIPI 2-lane, 24M input)  --->
+                           (X) RAW10 1920X1080 30fps, MIPI 2-lane, 24M input
    ```
+5. **Modify chip version:**
+
+   If your board requires chip revision 3.0:
+
+   ```
+   Chip revision  --->
+       [] Select ESP32-P4 revisions <3.0 (No >=3.x Support)
+           Minimum Supported ESP32-P4 Revision  --->
+               [*] Rev v3.0
+   ```
+
 
 ## Building and Running
 
