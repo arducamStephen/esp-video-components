@@ -806,6 +806,20 @@ void app_main(void)
     otherwise the camera device may not be able to start due to the lack of the main clock.*/
     ESP_ERROR_CHECK(example_video_init());
 
+    uint8_t write_buffer[2] = {0x01, 0x03};
+    uint8_t read_buffer[4];
+    i2c_master_bus_handle_t bus_handle;
+    i2c_master_dev_handle_t client_handle;
+    i2c_master_get_bus_handle(0, &bus_handle);
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x0c,
+        .scl_speed_hz = 100000,
+    };
+    i2c_master_bus_add_device(bus_handle, &dev_cfg, &client_handle);
+    i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
+    ESP_LOGI(TAG, "I2C read: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
