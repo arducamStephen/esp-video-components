@@ -69,7 +69,7 @@ component config  --->
     USB Device UVC  --->
         USB Cam1 Config  --->
              Cam1 Format (MJPEG)  --->
-   
+                (X) MJPEG
 ```
 
 ##### H.264

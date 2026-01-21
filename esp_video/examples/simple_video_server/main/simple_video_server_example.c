@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: ESPRESSIF MIT
  */
@@ -27,6 +27,8 @@
 #include "lwip/inet.h"
 #include "lwip/apps/netbiosns.h"
 #include "example_video_common.h"
+
+esp_err_t init_isp_dev(int cam_fd);
 
 #define EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER  CONFIG_EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER
 
@@ -421,7 +423,9 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
         memset(&buf, 0, sizeof(buf));
         buf.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
+        ESP_LOGW(TAG, "Try DQ");
         ESP_RETURN_ON_ERROR(ioctl(video->fd, VIDIOC_DQBUF, &buf), TAG, "failed to receive video frame");
+        ESP_LOGW(TAG, "DQ OK");
         if (!(buf.flags & V4L2_BUF_FLAG_DONE)) {
             ESP_RETURN_ON_ERROR(ioctl(video->fd, VIDIOC_QBUF, &buf), TAG, "failed to queue video frame");
             continue;
@@ -501,33 +505,33 @@ static esp_err_t init_web_cam_video(web_cam_video_t *video, const web_cam_video_
     struct v4l2_requestbuffers req;
     struct v4l2_captureparm *cparam = &sparm.parm.capture;
     struct v4l2_fract *timeperframe = &cparam->timeperframe;
+    struct v4l2_format format;
+    memset(&format, 0, sizeof(struct v4l2_format));
 
     fd = open(config->dev_name, O_RDWR);
     ESP_RETURN_ON_FALSE(fd >= 0, ESP_ERR_NOT_FOUND, TAG, "Open video device %s failed", config->dev_name);
+
+    /* If the sensor outputs in RAW format, configure the ISP to output in YUV format by default. */
+    struct v4l2_fmtdesc fmtdesc = {
+        .index = 0, /* The format at index 0 is the sensor's primitive output format.*/
+        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+    };
+
+    ESP_GOTO_ON_ERROR(ioctl(fd, VIDIOC_ENUM_FMT, &fmtdesc), fail0, TAG, "Failed enmu fmt from %s", config->dev_name);
+    if (fmtdesc.pixelformat == V4L2_PIX_FMT_SBGGR8) {
+        format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ESP_GOTO_ON_ERROR(ioctl(fd, VIDIOC_G_FMT, &format), fail0, TAG, "Failed get fmt from %s", config->dev_name);
+        format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        // format.fmt.pix.pixelformat = V4L2_PIX_FMT_SBGGR8;
+        format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+        ESP_GOTO_ON_ERROR(ioctl(fd, VIDIOC_S_FMT, &format), fail0, TAG, "Failed set fmt to %s", config->dev_name);
+        ESP_LOGI(TAG, "Set fmt");
+    }
 
     memset(&sparm, 0, sizeof(sparm));
     sparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     ESP_GOTO_ON_ERROR(ioctl(fd, VIDIOC_G_PARM, &sparm), fail0, TAG, "failed to get frame rate from %s", config->dev_name);
     video->frame_rate = timeperframe->denominator / timeperframe->numerator;
-
-#if CONFIG_EXAMPLE_ENABLE_MIPI_CSI_CROP
-    /**
-     * Command VIDIOC_S_SELECTION should be called before VIDIOC_REQBUFS.
-     */
-
-    struct v4l2_selection selection;
-
-    memset(&selection, 0, sizeof(selection));
-    selection.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    selection.target = V4L2_SEL_TGT_CROP;
-    selection.r.left = CONFIG_EXAMPLE_MIPI_CSI_CROP_LEFT;
-    selection.r.width = CONFIG_EXAMPLE_MIPI_CSI_CROP_WIDTH;
-    selection.r.top = CONFIG_EXAMPLE_MIPI_CSI_CROP_TOP;
-    selection.r.height = CONFIG_EXAMPLE_MIPI_CSI_CROP_HEIGHT;
-    if (ioctl(fd, VIDIOC_S_SELECTION, &selection) != 0) {
-        ESP_LOGE(TAG, "failed to set selection");
-    }
-#endif
 
     memset(&req, 0, sizeof(req));
     req.count  = EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER;
@@ -550,11 +554,6 @@ static esp_err_t init_web_cam_video(web_cam_video_t *video, const web_cam_video_
 
         ESP_GOTO_ON_ERROR(ioctl(fd, VIDIOC_QBUF, &buf), fail0, TAG, "failed to queue frame vbuf from %s", config->dev_name);
     }
-
-    struct v4l2_format format;
-    memset(&format, 0, sizeof(struct v4l2_format));
-    format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    ESP_GOTO_ON_ERROR(ioctl(fd, VIDIOC_G_FMT, &format), fail0, TAG, "Failed get fmt from %s", config->dev_name);
 
     video->fd = fd;
     video->width = format.fmt.pix.width;
@@ -650,6 +649,8 @@ static esp_err_t new_web_cam(const web_cam_video_config_t *config, int config_co
             ESP_GOTO_ON_ERROR(ioctl(wc->video[i].fd, VIDIOC_STREAMON, &type), fail1, TAG, "failed to start stream");
         }
     }
+
+    // init_isp_dev(wc->video[0].fd);
 
     *ret_wc = wc;
 

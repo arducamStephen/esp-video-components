@@ -17,8 +17,6 @@
 #include "uvc_frame_config.h"
 #include "example_video_common.h"
 
-#define IPA_TARGET_NAME     "sc202cs_default_p4_eco4"
-
 #if CONFIG_FORMAT_MJPEG_CAM1
 #define ENCODE_DEV_PATH     ESP_VIDEO_JPEG_DEVICE_NAME
 #define UVC_OUTPUT_FORMAT   V4L2_PIX_FMT_JPEG
@@ -188,7 +186,7 @@ static esp_err_t video_start_cb(uvc_format_t uvc_format, int width, int height, 
         int fmt_index = 0;
         const uint32_t jpeg_input_formats[] = {
             V4L2_PIX_FMT_RGB565,
-            V4L2_PIX_FMT_YUV422P,
+            V4L2_PIX_FMT_UYVY,
             V4L2_PIX_FMT_RGB24,
             V4L2_PIX_FMT_GREY
         };

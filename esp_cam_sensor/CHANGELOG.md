@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Added configuration options for supported formats. Once a supported format is enabled, it can be found in the configuration menu or enumeration command `VIDIOC_ENUM_FMT`.
+- Added YUV422 and RGB565 image data formats with byte order.
+  - YUV422 supports two byte orders: YUYV and UYVY, represented by `ESP_CAM_SENSOR_PIXFORMAT_YUV422_YUYV` and `ESP_CAM_SENSOR_PIXFORMAT_YUV422_UYVY` respectively; RGB565 supports two byte orders: RGB565_LE and RGB565_BE, represented by `ESP_CAM_SENSOR_PIXFORMAT_RGB565_LE` and `ESP_CAM_SENSOR_PIXFORMAT_RGB565_BE` respectively.
+- Added the 2-bit data I/O mode for the parallel I/O interface of the SPI camera interface driver.
+  - The parallel I/O interface is supported in ESP-IDF version 5.5.2 and later.
+- Added OV9281 MIPI camera sensor driver.
+- Added Pivariety MIPI camera sensor driver.
+
+## 1.7.0
+
+- Fixed OV5640 DVP yuv422 seq.
+- Added the const descriptor to MT9D111 reglist.
+- Added IPA configuration parameters for the SC202CS RAW8 720p format.
+- Added env luma parameters to the SC2336 JSON file.
+- Added option to enable or disable SPI camera interface driver.
+
 ## 1.6.0
 
 - Moved the sensor ID to the public attribute header file.

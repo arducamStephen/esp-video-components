@@ -101,7 +101,7 @@ menu "Espressif Video Configuration"
 
     menuconfig ESP_VIDEO_ENABLE_SPI_VIDEO_DEVICE
         bool "Enable SPI based Video Device"
-        depends on SOC_GPSPI_SUPPORTED
+        depends on CAM_CTRL_SPI_ENABLE
         select ESP_VIDEO_ENABLE_DATA_PREPROCESSING
         select CAM_CTLR_SPI_DISABLE_BACKUP_BUFFER
         select CAM_CTLR_SPI_DISABLE_AUTO_DECODE
@@ -186,6 +186,14 @@ menu "Espressif Video Configuration"
                 Size in bytes of 1 URB, 10kB should be enough for start.
                 Larger value results in less frequent interrupts at the
                 cost of memory consumption
+
+        config USB_UVC_INIT_TIMEOUT_MS
+            int "UVC device initialization timeout (ms)"
+            default 10000
+            range 500 60000
+            help
+                Timeout in milliseconds for waiting for UVC device enumeration.
+                Default is 10000ms (10 seconds).
     endif
 
     config ESP_VIDEO_ENABLE_HW_H264_VIDEO_DEVICE
