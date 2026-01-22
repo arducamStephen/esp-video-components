@@ -3419,7 +3419,7 @@ int imx500_start_streaming(struct imx500 *imx500)
 
 	
 
-#if 1
+#if 0
     if (imx500->fw_network == NULL) {
         
         imx500->fw_network = imx500_network_posenet_data;//data;
