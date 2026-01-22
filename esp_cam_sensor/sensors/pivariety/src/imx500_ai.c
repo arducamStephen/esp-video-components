@@ -3429,11 +3429,12 @@ int imx500_start_streaming(struct imx500 *imx500)
     }
 #endif
 
-	imx500ai_write(imx500->sccb_handle, IMX500_REG8(0x0103), 0x01); // reset
+	// imx500ai_write(imx500->sccb_handle, IMX500_REG8(0x0103), 0x01); // reset
 	delay_ms(10);
 
-	ret = imx500ai_write(imx500->sccb_handle, IMX500_REG_IMAGE_ONLY_MODE,
-			imx500->fw_network ? IMX500_IMAGE_ONLY_FALSE : IMX500_IMAGE_ONLY_TRUE);
+	ret = imx500ai_write(imx500->sccb_handle, IMX500_REG_IMAGE_ONLY_MODE, IMX500_IMAGE_ONLY_FALSE);
+	// ret = imx500ai_write(imx500->sccb_handle, IMX500_REG_IMAGE_ONLY_MODE,
+	// 		imx500->fw_network ? IMX500_IMAGE_ONLY_FALSE : IMX500_IMAGE_ONLY_TRUE);
 	if (ret) {
 		ESP_LOGE(TAG, "%s failed to set image mode\n", __func__);
 		return ret;

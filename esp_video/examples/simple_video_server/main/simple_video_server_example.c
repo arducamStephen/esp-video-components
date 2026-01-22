@@ -27,6 +27,9 @@
 #include "lwip/inet.h"
 #include "lwip/apps/netbiosns.h"
 #include "example_video_common.h"
+#include "g_config.h"
+#include "esp_rom_sys.h"
+
 
 esp_err_t init_isp_dev(int cam_fd);
 
@@ -806,8 +809,6 @@ void app_main(void)
     otherwise the camera device may not be able to start due to the lack of the main clock.*/
     ESP_ERROR_CHECK(example_video_init());
 
-    uint8_t write_buffer[2] = {0x01, 0x03};
-    uint8_t read_buffer[4];
     i2c_master_bus_handle_t bus_handle;
     i2c_master_dev_handle_t client_handle;
     i2c_master_get_bus_handle(0, &bus_handle);
@@ -817,8 +818,38 @@ void app_main(void)
         .scl_speed_hz = 100000,
     };
     i2c_master_bus_add_device(bus_handle, &dev_cfg, &client_handle);
+
+    uint8_t write_buffer[2] = {0x01, 0x03};
+    uint8_t read_buffer[4];
     i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
-    ESP_LOGI(TAG, "I2C read: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+    ESP_LOGI(TAG, "Pivariety PID: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+    // 延时 2s 等待模型加载
+    esp_rom_delay_us(5*1000*1000);
+    uint32_t data_size = 0;
+
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x01;
+    i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
+    ESP_LOGI(TAG, "REG_DATA_SIZE_0: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+
+    // esp_rom_delay_us(100*1000);
+    // write_buffer[0] = 0x07;
+    // write_buffer[1] = 0x02;
+    // i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
+    // ESP_LOGI(TAG, "REG_DATA_SIZE_1: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+    // esp_rom_delay_us(100*1000);
+    // write_buffer[0] = 0x07;
+    // write_buffer[1] = 0x03;
+    // i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
+    // ESP_LOGI(TAG, "REG_DATA_SIZE_2: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+    // esp_rom_delay_us(100*1000);
+    // write_buffer[0] = 0x07;
+    // write_buffer[1] = 0x04;
+    // ESP_LOGI(TAG, "REG_DATA_SIZE_3: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
