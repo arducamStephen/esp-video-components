@@ -1990,7 +1990,7 @@ static const struct imx500_reg_sequence dnn_regs[] = {
 	{ IMX500_REG8(0xD753), 0x01 }, // DNN_SPI_TRANSFER_INDICATION
 	{ IMX500_REG8(0xD754), 0x00 }, // DNN_SPI_TRANSFER_METHOD
 	{ IMX500_REG8(0xD755), 0x01 }, // DNN_RESULT_SPI_OUT (set in standby mode)
-	{ IMX500_REG8(0xD756), 0x00 }, // DNN_INPUT_SPI_OUT (set in standby mode)
+	{ IMX500_REG8(0xD756), 0x01 }, // DNN_INPUT_SPI_OUT (set in standby mode)
 	// { IMX500_REG8(0x3052), 0x00 }, // MIPI_DATA_METADATA_OUT_SEL(set in standby mode)
 
 	{ IMX500_REG8(0xd960), 0x52 },

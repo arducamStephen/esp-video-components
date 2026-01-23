@@ -29,6 +29,8 @@
 #include "example_video_common.h"
 #include "g_config.h"
 #include "esp_rom_sys.h"
+#include "driver/spi_master.h"
+#include "driver/gpio.h"
 
 
 esp_err_t init_isp_dev(int cam_fd);
@@ -56,6 +58,16 @@ extern const uint8_t assets_index_js_gz_start[] asm("_binary_index_js_gz_start")
 extern const uint8_t assets_index_js_gz_end[] asm("_binary_index_js_gz_end");
 extern const uint8_t assets_index_css_gz_start[] asm("_binary_index_css_gz_start");
 extern const uint8_t assets_index_css_gz_end[] asm("_binary_index_css_gz_end");
+
+static i2c_master_bus_handle_t _bus_handle;
+static i2c_master_dev_handle_t _client_handle;
+static spi_device_handle_t _spi_dev;
+#define SPI_HOST       SPI2_HOST
+
+#define PIN_NUM_MOSI   GPIO_NUM_48
+#define PIN_NUM_MISO   GPIO_NUM_53
+#define PIN_NUM_CLK    GPIO_NUM_26
+#define PIN_NUM_CS     GPIO_NUM_47
 
 /**
  * @brief Web cam control structure
@@ -795,6 +807,137 @@ static void initialise_mdns(void)
                                      sizeof(serviceTxtData) / sizeof(serviceTxtData[0])));
 }
 
+bool wait_metadata_ready(void)
+{
+    int64_t start_us = esp_timer_get_time();
+    const int64_t timeout_us = 6000 * 1000; // 6s
+
+    uint8_t ready_status;
+
+    uint8_t write_buffer[2];
+    uint8_t read_buffer[4];
+
+    while ((esp_timer_get_time() - start_us) < timeout_us) {
+        write_buffer[0] = 0x07;
+        write_buffer[1] = 0x05;
+        i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
+        ESP_LOGI(TAG, "REG_DATA_READY: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+        ready_status = read_buffer[3];
+
+        if (ready_status == 0x01) {
+            printf("Data ready! (0x%02X)\n", ready_status);
+            return true;
+        }
+
+        // 等价 sleep_ms(1000)
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    printf("Timeout: Data not ready\n");
+    return false;
+}
+
+int32_t print_buf_hex(const uint8_t* buf, uint32_t len) {
+    uint32_t i;
+    for (i = 0; i < len; ++i) {
+        printf("0x%02x ", buf[i]);
+    }
+    return 0;
+}
+
+void spi_init(uint32_t frame_len)
+{
+    spi_bus_config_t buscfg = {
+        .mosi_io_num = PIN_NUM_MOSI,
+        .miso_io_num = PIN_NUM_MISO,
+        .sclk_io_num = PIN_NUM_CLK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = frame_len,
+    };
+
+    ESP_ERROR_CHECK(
+        spi_bus_initialize(SPI_HOST, &buscfg, SPI_DMA_CH_AUTO)
+    );
+
+    spi_device_interface_config_t devcfg = {
+        .clock_speed_hz = 5 * 1000 * 1000,   // 先稳
+        .mode = 0,
+        .spics_io_num = PIN_NUM_CS,
+        .queue_size = 1,
+        .flags = 0,
+    };
+
+    ESP_ERROR_CHECK(
+        spi_bus_add_device(SPI_HOST, &devcfg, &_spi_dev)
+    );
+}
+
+/**
+ * Read frame data using new protocol:
+ * 1. Read 4-byte data size from I2C registers 0x01-0x04
+ * 2. Write 0x01 to REG_DATA_START (0x06) to tell device to prepare data
+ * 3. Check REG_DATA_READY (0x05), wait until it's 0x01
+ * 4. Read data via SPI
+ * @param rx_buf Receive buffer (must be large enough for data_size bytes)
+ * @param max_len Maximum buffer size
+ * @return Actual number of bytes read, or 0 on error
+ */
+uint32_t read_frame_with_size(uint8_t *rx_buf, uint32_t max_len) {
+
+    // Step 1: Read data size from registers 0x01-0x04
+    // 延时 2s 等待模型加载
+    uint32_t data_size = 0;
+    uint8_t write_buffer[6];
+    uint8_t read_buffer[4];
+
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x01;
+    i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
+    ESP_LOGI(TAG, "REG_DATA_SIZE: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+    data_size = (((uint32_t)read_buffer[0]&0xff) << 24) + (((uint32_t)read_buffer[1]&0xff) << 16) + (((uint32_t)read_buffer[2]&0xff) << 8) + ((uint32_t)read_buffer[3]&0xff);
+    
+    spi_init(data_size);
+
+    uint8_t *t_buf = heap_caps_malloc(12, MALLOC_CAP_DMA);
+    uint8_t *r_buf = heap_caps_malloc(12, MALLOC_CAP_DMA);
+    spi_transaction_t t = {
+        .length = 12 * 8,
+        .rxlength  = 12 * 8,
+        .tx_buffer = t_buf,       // 关键：只读 → 不提供 TX buffer
+        .rx_buffer = r_buf,     // 读到这里
+        .flags     = 0,
+    };
+
+    
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    
+    // Step 2: Write 0x01 to REG_DATA_START (0x706) to trigger data preparation
+    printf("Sending 0x01 to REG_DATA_START (0x706) to start data preparation\n");
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x06;
+    write_buffer[2] = 0x00;
+    write_buffer[3] = 0x00;
+    write_buffer[4] = 0x00;
+    write_buffer[5] = 0x01;
+    i2c_master_transmit(_client_handle, write_buffer, sizeof(write_buffer), -1);
+    ESP_LOGI(TAG, "REG_DATA_START: %02x%02x%02x%02x", write_buffer[2], write_buffer[3], write_buffer[4], write_buffer[5]);
+
+    wait_metadata_ready();
+
+    printf("starting SPI read...\n");
+
+    esp_err_t ret = spi_device_polling_transmit(_spi_dev, &t);
+    if (ret != ESP_OK) {
+        printf("SPI read failed\n");
+    } else {
+        print_buf_hex(r_buf, 12);
+    }
+    
+    return data_size;
+}
+
 void app_main(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -808,48 +951,24 @@ void app_main(void)
     /*For camera devices that require the host to provide XCLK, the video_init() must be called immediately after the device is restarted,
     otherwise the camera device may not be able to start due to the lack of the main clock.*/
     ESP_ERROR_CHECK(example_video_init());
-
-    i2c_master_bus_handle_t bus_handle;
-    i2c_master_dev_handle_t client_handle;
-    i2c_master_get_bus_handle(0, &bus_handle);
+    i2c_master_get_bus_handle(0, &_bus_handle);
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = 0x0c,
         .scl_speed_hz = 100000,
     };
-    i2c_master_bus_add_device(bus_handle, &dev_cfg, &client_handle);
+    i2c_master_bus_add_device(_bus_handle, &dev_cfg, &_client_handle);
 
     uint8_t write_buffer[2] = {0x01, 0x03};
     uint8_t read_buffer[4];
-    i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
+    i2c_master_transmit_receive(_client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
     ESP_LOGI(TAG, "Pivariety PID: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
 
-    // 延时 2s 等待模型加载
-    esp_rom_delay_us(5*1000*1000);
-    uint32_t data_size = 0;
+    uint8_t* r_buf = (uint8_t*)malloc(1024);
 
-    write_buffer[0] = 0x07;
-    write_buffer[1] = 0x01;
-    i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
-    ESP_LOGI(TAG, "REG_DATA_SIZE_0: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+    uint32_t data_size = read_frame_with_size(r_buf, 1024);
 
-
-    // esp_rom_delay_us(100*1000);
-    // write_buffer[0] = 0x07;
-    // write_buffer[1] = 0x02;
-    // i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
-    // ESP_LOGI(TAG, "REG_DATA_SIZE_1: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
-
-    // esp_rom_delay_us(100*1000);
-    // write_buffer[0] = 0x07;
-    // write_buffer[1] = 0x03;
-    // i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
-    // ESP_LOGI(TAG, "REG_DATA_SIZE_2: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
-
-    // esp_rom_delay_us(100*1000);
-    // write_buffer[0] = 0x07;
-    // write_buffer[1] = 0x04;
-    // ESP_LOGI(TAG, "REG_DATA_SIZE_3: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+    ESP_LOGI(TAG, "data_size: %d", data_size);
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
