@@ -31,6 +31,7 @@
 #include "esp_rom_sys.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "metadata_parser.h"
 
 
 esp_err_t init_isp_dev(int cam_fd);
@@ -873,17 +874,71 @@ void spi_init(uint32_t frame_len)
     );
 }
 
+int32_t spi_read(uint8_t *buf, uint32_t size)
+{
+    if (!buf || size == 0) {
+        return -1;
+    }
+
+    esp_err_t ret;
+    uint32_t offset = 0;
+
+    uint8_t *tx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
+    uint8_t *rx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
+
+    if (!tx_buf || !rx_buf) {
+        printf("DMA malloc failed\n");
+        goto err;
+    }
+
+    memset(tx_buf, SPI_DUMMY_BYTE, SPI_MAX_DMA_BYTES);
+
+    while (offset < size) {
+        uint32_t chunk = size - offset;
+        if (chunk > SPI_MAX_DMA_BYTES) {
+            chunk = SPI_MAX_DMA_BYTES;
+        }
+
+        spi_transaction_t t = {
+            .length    = chunk * 8,
+            .rxlength  = chunk * 8,
+            .tx_buffer = tx_buf,
+            .rx_buffer = rx_buf,
+            .flags     = 0,
+        };
+
+        ret = spi_device_polling_transmit(_spi_dev, &t);
+        if (ret != ESP_OK) {
+            printf("SPI read failed at offset %lu\n", offset);
+            goto err;
+        }
+
+        memcpy(buf + offset, rx_buf, chunk);
+        offset += chunk;
+    }
+
+    heap_caps_free(tx_buf);
+    heap_caps_free(rx_buf);
+    return size;
+
+err:
+    if (tx_buf) heap_caps_free(tx_buf);
+    if (rx_buf) heap_caps_free(rx_buf);
+    return -1;
+}
+
+
 /**
  * Read frame data using new protocol:
  * 1. Read 4-byte data size from I2C registers 0x01-0x04
  * 2. Write 0x01 to REG_DATA_START (0x06) to tell device to prepare data
  * 3. Check REG_DATA_READY (0x05), wait until it's 0x01
  * 4. Read data via SPI
- * @param rx_buf Receive buffer (must be large enough for data_size bytes)
+ * @param r_buf Receive buffer (must be large enough for data_size bytes)
  * @param max_len Maximum buffer size
  * @return Actual number of bytes read, or 0 on error
  */
-uint32_t read_frame_with_size(uint8_t *rx_buf, uint32_t max_len) {
+uint32_t read_frame_with_size(uint8_t *r_buf, uint32_t max_len) {
 
     // Step 1: Read data size from registers 0x01-0x04
     // 延时 2s 等待模型加载
@@ -898,22 +953,13 @@ uint32_t read_frame_with_size(uint8_t *rx_buf, uint32_t max_len) {
 
     data_size = (((uint32_t)read_buffer[0]&0xff) << 24) + (((uint32_t)read_buffer[1]&0xff) << 16) + (((uint32_t)read_buffer[2]&0xff) << 8) + ((uint32_t)read_buffer[3]&0xff);
     
-    spi_init(data_size);
+    if (data_size > max_len) {
+        printf("Error: data_size > max_data_r_buf_size: %lu > %lu\n", data_size, max_len);
+        return data_size;
+    }
 
-    uint8_t *t_buf = heap_caps_malloc(12, MALLOC_CAP_DMA);
-    uint8_t *r_buf = heap_caps_malloc(12, MALLOC_CAP_DMA);
-    spi_transaction_t t = {
-        .length = 12 * 8,
-        .rxlength  = 12 * 8,
-        .tx_buffer = t_buf,       // 关键：只读 → 不提供 TX buffer
-        .rx_buffer = r_buf,     // 读到这里
-        .flags     = 0,
-    };
-
-    
     vTaskDelay(pdMS_TO_TICKS(1000));
     
-    // Step 2: Write 0x01 to REG_DATA_START (0x706) to trigger data preparation
     printf("Sending 0x01 to REG_DATA_START (0x706) to start data preparation\n");
     write_buffer[0] = 0x07;
     write_buffer[1] = 0x06;
@@ -923,18 +969,9 @@ uint32_t read_frame_with_size(uint8_t *rx_buf, uint32_t max_len) {
     write_buffer[5] = 0x01;
     i2c_master_transmit(_client_handle, write_buffer, sizeof(write_buffer), -1);
     ESP_LOGI(TAG, "REG_DATA_START: %02x%02x%02x%02x", write_buffer[2], write_buffer[3], write_buffer[4], write_buffer[5]);
-
     wait_metadata_ready();
-
     printf("starting SPI read...\n");
-
-    esp_err_t ret = spi_device_polling_transmit(_spi_dev, &t);
-    if (ret != ESP_OK) {
-        printf("SPI read failed\n");
-    } else {
-        print_buf_hex(r_buf, 12);
-    }
-    
+    spi_read(r_buf, data_size);
     return data_size;
 }
 
@@ -964,11 +1001,21 @@ void app_main(void)
     i2c_master_transmit_receive(_client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
     ESP_LOGI(TAG, "Pivariety PID: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
 
-    uint8_t* r_buf = (uint8_t*)malloc(1024);
+    uint8_t* r_buf = (uint8_t*)malloc(MAX_DATA_R_BUF_SIZE);
+    spi_init(MAX_DATA_R_BUF_SIZE);
+    uint32_t data_size = read_frame_with_size(r_buf, MAX_DATA_R_BUF_SIZE);
+    uint8_t* metadata = r_buf + VALID_DATA_OFFSET;
 
-    uint32_t data_size = read_frame_with_size(r_buf, 1024);
+    IMX500OutputHeader* imx500_output_header = (IMX500OutputHeader*)malloc(sizeof(IMX500OutputHeader));
+    unpack_imx500_output_header(metadata, imx500_output_header);
+    free(imx500_output_header);
+    parseApParams(metadata+IMX500_HEADER_LEN);
+
 
     ESP_LOGI(TAG, "data_size: %d", data_size);
+    print_buf_hex(r_buf, 12);
+    printf("\n");
+
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
