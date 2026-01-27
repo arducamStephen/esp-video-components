@@ -49,7 +49,7 @@ void parseApParams(const uint8_t* data) {
         printf(" ]\n");
     }
     printf("OutputTensor num: %ld\n", output_tensors->size());
-    for (int i = 0; i < input_tensors->size(); ++i) {
+    for (int i = 0; i < output_tensors->size(); ++i) {
         printf("OutputTensor%d scale             %f\n", i, output_tensors->Get(i)->scale());
         printf("OutputTensor%d shift             %d\n", i, output_tensors->Get(i)->shift());
         printf("OutputTensor%d format            %d\n", i, output_tensors->Get(i)->format());

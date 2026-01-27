@@ -811,7 +811,7 @@ static void initialise_mdns(void)
 bool wait_metadata_ready(void)
 {
     int64_t start_us = esp_timer_get_time();
-    const int64_t timeout_us = 6000 * 1000; // 6s
+    const int64_t timeout_us = 10* 1000 * 1000;
 
     uint8_t ready_status;
 
@@ -987,6 +987,7 @@ void app_main(void)
 
     /*For camera devices that require the host to provide XCLK, the video_init() must be called immediately after the device is restarted,
     otherwise the camera device may not be able to start due to the lack of the main clock.*/
+
     ESP_ERROR_CHECK(example_video_init());
     i2c_master_get_bus_handle(0, &_bus_handle);
     i2c_device_config_t dev_cfg = {
@@ -996,9 +997,32 @@ void app_main(void)
     };
     i2c_master_bus_add_device(_bus_handle, &dev_cfg, &_client_handle);
 
-    uint8_t write_buffer[2] = {0x01, 0x03};
+    uint8_t write_buffer[6];
     uint8_t read_buffer[4];
-    i2c_master_transmit_receive(_client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
+
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x10;
+    write_buffer[2] = 0x00;
+    write_buffer[3] = 0x00;
+    write_buffer[4] = 0x00;
+    write_buffer[5] = 0x01;
+    i2c_master_transmit(_client_handle, write_buffer, sizeof(write_buffer), -1);
+    ESP_LOGI(TAG, "START_IMX500_BOOT_REG: %02x%02x%02x%02x", write_buffer[2], write_buffer[3], write_buffer[4], write_buffer[5]);
+
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x09;
+    while(1) {
+        i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
+        ESP_LOGI(TAG, "BOOT_STATE: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+        if (read_buffer[3] == 0x01) break;
+        printf("wait for loading model ... \n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    
+
+    write_buffer[0] = 0x01;
+    write_buffer[1] = 0x03;
+    i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
     ESP_LOGI(TAG, "Pivariety PID: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
 
     uint8_t* r_buf = (uint8_t*)malloc(MAX_DATA_R_BUF_SIZE);
@@ -1008,15 +1032,13 @@ void app_main(void)
 
     IMX500OutputHeader* imx500_output_header = (IMX500OutputHeader*)malloc(sizeof(IMX500OutputHeader));
     unpack_imx500_output_header(metadata, imx500_output_header);
-    free(imx500_output_header);
+    
     parseApParams(metadata+IMX500_HEADER_LEN);
-
-
     ESP_LOGI(TAG, "data_size: %d", data_size);
     print_buf_hex(r_buf, 12);
     printf("\n");
 
-
+    free(imx500_output_header);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
