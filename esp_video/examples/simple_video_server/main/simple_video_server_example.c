@@ -13,6 +13,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "cJSON.h"
 #include "esp_event.h"
 #include "esp_err.h"
@@ -111,6 +112,12 @@ typedef struct request_desc {
 } request_desc_t;
 
 static const char *TAG = "example";
+static QueueHandle_t metadata_queue;
+static uint8_t *metadata_buf;
+
+typedef struct metadata_frame {
+    uint32_t data_size;
+} metadata_frame_t;
 
 static bool is_valid_web_cam(web_cam_video_t *video)
 {
@@ -975,6 +982,45 @@ uint32_t read_frame_with_size(uint8_t *r_buf, uint32_t max_len) {
     return data_size;
 }
 
+static void metadata_reader_task(void *arg)
+{
+    metadata_frame_t frame;
+
+    while (true) {
+        frame.data_size = read_frame_with_size(metadata_buf, MAX_DATA_R_BUF_SIZE);
+        if (metadata_queue) {
+            xQueueSend(metadata_queue, &frame, portMAX_DELAY);
+        }
+    }
+}
+
+static void metadata_parser_task(void *arg)
+{
+    metadata_frame_t frame;
+
+    while (xQueueReceive(metadata_queue, &frame, portMAX_DELAY) == pdTRUE) {
+        if (frame.data_size == 0 || frame.data_size > MAX_DATA_R_BUF_SIZE) {
+            ESP_LOGW(TAG, "Invalid metadata size: %" PRIu32, frame.data_size);
+            continue;
+        }
+
+        uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
+        IMX500OutputHeader *imx500_output_header = (IMX500OutputHeader *)malloc(sizeof(IMX500OutputHeader));
+        if (!imx500_output_header) {
+            ESP_LOGE(TAG, "Failed to allocate IMX500OutputHeader");
+            continue;
+        }
+
+        unpack_imx500_output_header(metadata, imx500_output_header);
+        parseApParams(metadata + IMX500_HEADER_LEN);
+        ESP_LOGI(TAG, "data_size: %" PRIu32, frame.data_size);
+        print_buf_hex(metadata_buf, 12);
+        printf("\n");
+
+        free(imx500_output_header);
+    }
+}
+
 void app_main(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -1025,20 +1071,21 @@ void app_main(void)
     i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
     ESP_LOGI(TAG, "Pivariety PID: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
 
-    uint8_t* r_buf = (uint8_t*)malloc(MAX_DATA_R_BUF_SIZE);
+    metadata_buf = (uint8_t *)malloc(MAX_DATA_R_BUF_SIZE);
+    if (!metadata_buf) {
+        ESP_LOGE(TAG, "Failed to allocate metadata buffer");
+        return;
+    }
     spi_init(MAX_DATA_R_BUF_SIZE);
-    uint32_t data_size = read_frame_with_size(r_buf, MAX_DATA_R_BUF_SIZE);
-    uint8_t* metadata = r_buf + VALID_DATA_OFFSET;
 
-    IMX500OutputHeader* imx500_output_header = (IMX500OutputHeader*)malloc(sizeof(IMX500OutputHeader));
-    unpack_imx500_output_header(metadata, imx500_output_header);
-    
-    parseApParams(metadata+IMX500_HEADER_LEN);
-    ESP_LOGI(TAG, "data_size: %d", data_size);
-    print_buf_hex(r_buf, 12);
-    printf("\n");
+    metadata_queue = xQueueCreate(1, sizeof(metadata_frame_t));
+    if (!metadata_queue) {
+        ESP_LOGE(TAG, "Failed to create metadata queue");
+        return;
+    }
 
-    free(imx500_output_header);
+    xTaskCreatePinnedToCore(metadata_reader_task, "metadata_reader", 4096, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(metadata_parser_task, "metadata_parser", 4096, NULL, 5, NULL, 0);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
