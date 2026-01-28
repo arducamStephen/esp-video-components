@@ -27,6 +27,9 @@
 #include "lwip/inet.h"
 #include "lwip/apps/netbiosns.h"
 #include "example_video_common.h"
+#include "driver/ppa.h"
+#include "app_drawing_utils.h"
+
 
 esp_err_t init_isp_dev(int cam_fd);
 
@@ -426,12 +429,20 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
         ESP_LOGW(TAG, "Try DQ");
         ESP_RETURN_ON_ERROR(ioctl(video->fd, VIDIOC_DQBUF, &buf), TAG, "failed to receive video frame");
         ESP_LOGW(TAG, "DQ OK");
+
+        
+
         if (!(buf.flags & V4L2_BUF_FLAG_DONE)) {
             ESP_RETURN_ON_ERROR(ioctl(video->fd, VIDIOC_QBUF, &buf), TAG, "failed to queue video frame");
             continue;
         }
 
         ESP_GOTO_ON_ERROR(httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY)), fail0, TAG, "failed to send boundary");
+        
+        //Draw a rectangle with specified RGB color on a buffer
+        draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                100, 100, 500, 500,
+                0, 255, 255, 0, 0, 20, false);
 
         if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
             video->jpeg_out_buf = video->buffer[buf.index];
@@ -523,7 +534,7 @@ static esp_err_t init_web_cam_video(web_cam_video_t *video, const web_cam_video_
         ESP_GOTO_ON_ERROR(ioctl(fd, VIDIOC_G_FMT, &format), fail0, TAG, "Failed get fmt from %s", config->dev_name);
         format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         // format.fmt.pix.pixelformat = V4L2_PIX_FMT_SBGGR8;
-        format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+        format.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
         ESP_GOTO_ON_ERROR(ioctl(fd, VIDIOC_S_FMT, &format), fail0, TAG, "Failed set fmt to %s", config->dev_name);
         ESP_LOGI(TAG, "Set fmt");
     }
