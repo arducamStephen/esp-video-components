@@ -25,6 +25,20 @@ typedef struct {
 } Tensor;
 
 typedef struct {
+    float scale;
+    int zero_point;
+} QuantParam;
+
+typedef struct {
+    float x1;
+    float y1;
+    float x2;
+    float y2;
+    float score;
+    int   class_id;
+} BBox;
+
+typedef struct {
     IMX500OutputHeader input_tensor_header;
     IMX500OutputHeader output_tensor_header;
     Tensor input_tensor;

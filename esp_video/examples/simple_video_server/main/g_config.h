@@ -4,7 +4,7 @@
 #define SPI_MAX_DMA_BYTES   4096
 #define SPI_DUMMY_BYTE      0xFF
 #define MAX_DATA_R_BUF_SIZE      2 * 1024 * 1024
-#define VALID_DATA_OFFSET 1
+#define VALID_DATA_OFFSET 0
 #define IMX500_HEADER_LEN 12
 
 #define REG_DATA_SIZE_0  0x701  // Data size byte 0 (MSB)

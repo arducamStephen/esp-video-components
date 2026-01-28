@@ -1005,10 +1005,11 @@ static void metadata_parser_task(void *arg)
         }
 
         uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
+        // print_buf_hex(metadata_buf, 12);
         // unpack_imx500_output_header(metadata, imx500_output_header);
         parseApParams(metadata);
         ESP_LOGI(TAG, "data_size: %" PRIu32, frame.data_size);
-        // print_buf_hex(metadata_buf, 12);
+        
         printf("\n");
     }
 }
