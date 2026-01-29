@@ -13,6 +13,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "cJSON.h"
 #include "esp_event.h"
 #include "esp_err.h"
@@ -27,11 +28,21 @@
 #include "lwip/inet.h"
 #include "lwip/apps/netbiosns.h"
 #include "example_video_common.h"
+#include "g_config.h"
+#include "esp_rom_sys.h"
+#include "driver/spi_master.h"
+#include "driver/gpio.h"
+#include "metadata_parser.h"
+
 #include "driver/ppa.h"
 #include "app_drawing_utils.h"
 
 
 esp_err_t init_isp_dev(int cam_fd);
+BBox g_bboxs[MAX_DETECT_ITEM_NUM];
+DetectionResult g_detection_result;
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 #define EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER  CONFIG_EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER
 
@@ -56,6 +67,16 @@ extern const uint8_t assets_index_js_gz_start[] asm("_binary_index_js_gz_start")
 extern const uint8_t assets_index_js_gz_end[] asm("_binary_index_js_gz_end");
 extern const uint8_t assets_index_css_gz_start[] asm("_binary_index_css_gz_start");
 extern const uint8_t assets_index_css_gz_end[] asm("_binary_index_css_gz_end");
+
+static i2c_master_bus_handle_t _bus_handle;
+static i2c_master_dev_handle_t _client_handle;
+static spi_device_handle_t _spi_dev;
+#define SPI_HOST       SPI2_HOST
+
+#define PIN_NUM_MOSI   GPIO_NUM_48
+#define PIN_NUM_MISO   GPIO_NUM_53
+#define PIN_NUM_CLK    GPIO_NUM_26
+#define PIN_NUM_CS     GPIO_NUM_47
 
 /**
  * @brief Web cam control structure
@@ -98,6 +119,12 @@ typedef struct request_desc {
 } request_desc_t;
 
 static const char *TAG = "example";
+static QueueHandle_t metadata_queue;
+static uint8_t *metadata_buf;
+
+typedef struct metadata_frame {
+    uint32_t data_size;
+} metadata_frame_t;
 
 static bool is_valid_web_cam(web_cam_video_t *video)
 {
@@ -401,6 +428,20 @@ static esp_err_t static_file_handler(httpd_req_t *req)
     return ESP_FAIL;
 }
 
+uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w) {
+    uint32_t x_ = 0;
+    float s = (float)(t_w) / (float)(s_w);
+    x_ = MIN((uint32_t)(x*s), t_w);
+    return x_;
+}
+
+uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h) {
+    uint32_t y_ = 0;
+    float s = (float)(t_h) / (float)(s_h);
+    y_ = MIN((uint32_t)(y*s), t_h);
+    return y_;
+}
+
 static esp_err_t image_stream_handler(httpd_req_t *req)
 {
     esp_err_t ret;
@@ -439,10 +480,26 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
 
         ESP_GOTO_ON_ERROR(httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY)), fail0, TAG, "failed to send boundary");
         
-        //Draw a rectangle with specified RGB color on a buffer
-        draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-                100, 100, 500, 500,
-                0, 255, 255, 0, 0, 20, false);
+        auto bboxs = g_detection_result.bboxs;
+        if (g_detection_result.valid_num > 0) {
+                draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                    bbox_coordinate_x_scale_map(bboxs[0].x1, 224, 1920),
+                    bbox_coordinate_x_scale_map(bboxs[0].y1, 224, 1080),
+                    bbox_coordinate_x_scale_map(bboxs[0].x2, 224, 1920), 
+                    bbox_coordinate_x_scale_map(bboxs[0].y2, 224, 1080),
+                    0, 0, 255, 0, 0, 20, false);
+        }
+
+        // for (int i = 0; i < g_detection_result.valid_num; ++i) {
+        //     //Draw a rectangle with specified RGB color on a buffer
+        //     draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+        //             bbox_coordinate_x_scale_map(bboxs[i].x1, 224, 1920),
+        //             bbox_coordinate_x_scale_map(bboxs[i].y1, 224, 1080),
+        //             bbox_coordinate_x_scale_map(bboxs[i].x2, 224, 1920), 
+        //             bbox_coordinate_x_scale_map(bboxs[i].y2, 224, 1080),
+        //             0, 0, 255, 0, 0, 20, false);
+        // }
+        
 
         if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
             video->jpeg_out_buf = video->buffer[buf.index];
@@ -803,6 +860,209 @@ static void initialise_mdns(void)
                                      sizeof(serviceTxtData) / sizeof(serviceTxtData[0])));
 }
 
+bool wait_metadata_ready(void)
+{
+    int64_t start_us = esp_timer_get_time();
+    const int64_t timeout_us = 10* 1000 * 1000;
+
+    uint8_t ready_status;
+
+    uint8_t write_buffer[2];
+    uint8_t read_buffer[4];
+
+    while ((esp_timer_get_time() - start_us) < timeout_us) {
+        write_buffer[0] = 0x07;
+        write_buffer[1] = 0x05;
+        i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
+        ESP_LOGI(TAG, "REG_DATA_READY: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+        ready_status = read_buffer[3];
+
+        if (ready_status == 0x01) {
+            printf("Data ready! (0x%02X)\n", ready_status);
+            return true;
+        }
+
+        // 等价 sleep_ms(1000)
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    printf("Timeout: Data not ready\n");
+    return false;
+}
+
+int32_t print_buf_hex(const uint8_t* buf, uint32_t len) {
+    uint32_t i;
+    for (i = 0; i < len; ++i) {
+        printf("0x%02x ", buf[i]);
+    }
+    return 0;
+}
+
+void spi_init(uint32_t frame_len)
+{
+    spi_bus_config_t buscfg = {
+        .mosi_io_num = PIN_NUM_MOSI,
+        .miso_io_num = PIN_NUM_MISO,
+        .sclk_io_num = PIN_NUM_CLK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = frame_len,
+    };
+
+    ESP_ERROR_CHECK(
+        spi_bus_initialize(SPI_HOST, &buscfg, SPI_DMA_CH_AUTO)
+    );
+
+    spi_device_interface_config_t devcfg = {
+        .clock_speed_hz = 5 * 1000 * 1000,   // 先稳
+        .mode = 0,
+        .spics_io_num = PIN_NUM_CS,
+        .queue_size = 1,
+        .flags = 0,
+    };
+
+    ESP_ERROR_CHECK(
+        spi_bus_add_device(SPI_HOST, &devcfg, &_spi_dev)
+    );
+}
+
+int32_t spi_read(uint8_t *buf, uint32_t size)
+{
+    if (!buf || size == 0) {
+        return -1;
+    }
+
+    esp_err_t ret;
+    uint32_t offset = 0;
+
+    uint8_t *tx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
+    uint8_t *rx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
+
+    if (!tx_buf || !rx_buf) {
+        printf("DMA malloc failed\n");
+        goto err;
+    }
+
+    memset(tx_buf, SPI_DUMMY_BYTE, SPI_MAX_DMA_BYTES);
+
+    while (offset < size) {
+        uint32_t chunk = size - offset;
+        if (chunk > SPI_MAX_DMA_BYTES) {
+            chunk = SPI_MAX_DMA_BYTES;
+        }
+
+        spi_transaction_t t = {
+            .length    = chunk * 8,
+            .rxlength  = chunk * 8,
+            .tx_buffer = tx_buf,
+            .rx_buffer = rx_buf,
+            .flags     = 0,
+        };
+
+        ret = spi_device_polling_transmit(_spi_dev, &t);
+        if (ret != ESP_OK) {
+            printf("SPI read failed at offset %lu\n", offset);
+            goto err;
+        }
+
+        memcpy(buf + offset, rx_buf, chunk);
+        offset += chunk;
+    }
+
+    heap_caps_free(tx_buf);
+    heap_caps_free(rx_buf);
+    return size;
+
+err:
+    if (tx_buf) heap_caps_free(tx_buf);
+    if (rx_buf) heap_caps_free(rx_buf);
+    return -1;
+}
+
+
+/**
+ * Read frame data using new protocol:
+ * 1. Read 4-byte data size from I2C registers 0x01-0x04
+ * 2. Write 0x01 to REG_DATA_START (0x06) to tell device to prepare data
+ * 3. Check REG_DATA_READY (0x05), wait until it's 0x01
+ * 4. Read data via SPI
+ * @param r_buf Receive buffer (must be large enough for data_size bytes)
+ * @param max_len Maximum buffer size
+ * @return Actual number of bytes read, or 0 on error
+ */
+uint32_t read_frame_with_size(uint8_t *r_buf, uint32_t max_len) {
+
+    // Step 1: Read data size from registers 0x01-0x04
+    // 延时 2s 等待模型加载
+    uint32_t data_size = 0;
+    uint8_t write_buffer[6];
+    uint8_t read_buffer[4];
+
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x01;
+    i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
+    ESP_LOGI(TAG, "REG_DATA_SIZE: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+    data_size = (((uint32_t)read_buffer[0]&0xff) << 24) + (((uint32_t)read_buffer[1]&0xff) << 16) + (((uint32_t)read_buffer[2]&0xff) << 8) + ((uint32_t)read_buffer[3]&0xff);
+    
+    if (data_size > max_len) {
+        printf("Error: data_size > max_data_r_buf_size: %lu > %lu\n", data_size, max_len);
+        return data_size;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    
+    printf("Sending 0x01 to REG_DATA_START (0x706) to start data preparation\n");
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x06;
+    write_buffer[2] = 0x00;
+    write_buffer[3] = 0x00;
+    write_buffer[4] = 0x00;
+    write_buffer[5] = 0x01;
+    i2c_master_transmit(_client_handle, write_buffer, sizeof(write_buffer), -1);
+    ESP_LOGI(TAG, "REG_DATA_START: %02x%02x%02x%02x", write_buffer[2], write_buffer[3], write_buffer[4], write_buffer[5]);
+    wait_metadata_ready();
+    printf("starting SPI read...\n");
+    spi_read(r_buf, data_size);
+    return data_size;
+}
+
+static void metadata_reader_task(void *arg)
+{
+    metadata_frame_t frame;
+
+    while (true) {
+        frame.data_size = read_frame_with_size(metadata_buf, MAX_DATA_R_BUF_SIZE);
+        if (metadata_queue) {
+            xQueueSend(metadata_queue, &frame, portMAX_DELAY);
+        }
+    }
+}
+
+static void metadata_parser_task(void *arg)
+{
+    metadata_frame_t frame;
+
+    while (xQueueReceive(metadata_queue, &frame, portMAX_DELAY) == pdTRUE) {
+        if (frame.data_size == 0 || frame.data_size > MAX_DATA_R_BUF_SIZE) {
+            ESP_LOGW(TAG, "Invalid metadata size: %" PRIu32, frame.data_size);
+            continue;
+        }
+
+        uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
+        // print_buf_hex(metadata_buf, 12);
+        // unpack_imx500_output_header(metadata, imx500_output_header);
+        parseApParams(metadata, &g_detection_result);
+        ESP_LOGI(TAG, "data_size: %" PRIu32, frame.data_size);
+        
+        printf("\n");
+    }
+}
+
+void detection_result_init(void) {
+    g_detection_result.bboxs = g_bboxs;
+}
+
 void app_main(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -815,22 +1075,60 @@ void app_main(void)
 
     /*For camera devices that require the host to provide XCLK, the video_init() must be called immediately after the device is restarted,
     otherwise the camera device may not be able to start due to the lack of the main clock.*/
-    ESP_ERROR_CHECK(example_video_init());
 
-    uint8_t write_buffer[2] = {0x01, 0x03};
-    uint8_t read_buffer[4];
-    i2c_master_bus_handle_t bus_handle;
-    i2c_master_dev_handle_t client_handle;
-    i2c_master_get_bus_handle(0, &bus_handle);
+    ESP_ERROR_CHECK(example_video_init());
+    i2c_master_get_bus_handle(0, &_bus_handle);
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = 0x0c,
         .scl_speed_hz = 100000,
     };
-    i2c_master_bus_add_device(bus_handle, &dev_cfg, &client_handle);
-    i2c_master_transmit_receive(client_handle, write_buffer, sizeof(write_buffer), read_buffer, sizeof(read_buffer), -1);
-    ESP_LOGI(TAG, "I2C read: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+    i2c_master_bus_add_device(_bus_handle, &dev_cfg, &_client_handle);
 
+    uint8_t write_buffer[6];
+    uint8_t read_buffer[4];
+
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x10;
+    write_buffer[2] = 0x00;
+    write_buffer[3] = 0x00;
+    write_buffer[4] = 0x00;
+    write_buffer[5] = 0x01;
+    i2c_master_transmit(_client_handle, write_buffer, sizeof(write_buffer), -1);
+    ESP_LOGI(TAG, "START_IMX500_BOOT_REG: %02x%02x%02x%02x", write_buffer[2], write_buffer[3], write_buffer[4], write_buffer[5]);
+
+    write_buffer[0] = 0x07;
+    write_buffer[1] = 0x09;
+    while(1) {
+        i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
+        ESP_LOGI(TAG, "BOOT_STATE: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+        if (read_buffer[3] == 0x01) break;
+        printf("wait for loading model ... \n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+    
+
+    write_buffer[0] = 0x01;
+    write_buffer[1] = 0x03;
+    i2c_master_transmit_receive(_client_handle, write_buffer, 2, read_buffer, sizeof(read_buffer), -1);
+    ESP_LOGI(TAG, "Pivariety PID: %02x%02x%02x%02x", read_buffer[0], read_buffer[1], read_buffer[2], read_buffer[3]);
+
+    metadata_buf = (uint8_t *)malloc(MAX_DATA_R_BUF_SIZE);
+    if (!metadata_buf) {
+        ESP_LOGE(TAG, "Failed to allocate metadata buffer");
+        return;
+    }
+    spi_init(MAX_DATA_R_BUF_SIZE);
+    detection_result_init();
+
+    metadata_queue = xQueueCreate(1, sizeof(metadata_frame_t));
+    if (!metadata_queue) {
+        ESP_LOGE(TAG, "Failed to create metadata queue");
+        return;
+    }
+
+    xTaskCreatePinnedToCore(metadata_reader_task, "metadata_reader", 4096, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(metadata_parser_task, "metadata_parser", 4096, NULL, 5, NULL, 0);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 

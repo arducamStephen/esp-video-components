@@ -1,6 +1,14 @@
-set(srcs "simple_video_server_example.c" "app_isp.c" "AI/app_drawing_utils.c")
+set(srcs 
+        "simple_video_server_example.c" 
+        "app_isp.c" 
+        "app_drawing_utils.c"
+        "metadata_parser.cc"
+        )
 
-set(include_dirs "AI")
+set(incs 
+        "."
+        "../flatbuffers/include")
+
 set(html_files "../frontend/gzipped/index.html.gz"
                "../frontend/gzipped/loading.jpg.gz"
                "../frontend/gzipped/favicon.ico.gz"
@@ -8,6 +16,5 @@ set(html_files "../frontend/gzipped/index.html.gz"
                "../frontend/gzipped/assets/index.css.gz")
 
 idf_component_register(SRCS "${srcs}"
-                       INCLUDE_DIRS ${include_dirs}
-                       PRIV_INCLUDE_DIRS .
+                       PRIV_INCLUDE_DIRS "${incs}"
                        EMBED_TXTFILES ${html_files})
