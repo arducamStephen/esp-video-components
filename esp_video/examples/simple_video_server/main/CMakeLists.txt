@@ -2,7 +2,7 @@ set(srcs
         "simple_video_server_example.c" 
         "app_isp.c" 
         "app_drawing_utils.c"
-        "metadata_parser.cc"
+        "ArducamIMX500SDK.cc"
         )
 
 set(incs 

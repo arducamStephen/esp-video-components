@@ -1,12 +1,13 @@
-#include "metadata_parser.h"
+#include "ArducamIMX500SDK.h"
 #include <algorithm>
 #include <vector>
 #include "stdio.h"
 #include "string.h"
-#include "g_config.h"
 
 #define ALIGN_DOWN(size, align) ((size) & ~((align) - 1))
 #define ALIGN_UP(size, align)   (ALIGN_DOWN((size) + (align) - 1, (align)))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 
 int32_t print_buf_hex(const uint8_t* buf, uint32_t len) {
@@ -40,61 +41,22 @@ void imx500_print_header(const IMX500OutputHeader *h)
 void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header) {
     const IMX500OutputHeader *data_ = (const IMX500OutputHeader *)data;
     memcpy(header, data_, sizeof(IMX500OutputHeader));
-    imx500_print_header(header); // for debug
+    // imx500_print_header(header); // for debug
 }
 
 extern "C" {
-void parseApParams(const uint8_t* data, DetectionResult* detection_result) {
+void parse_ap_params(const uint8_t* data, DetectionResult* detection_result) {
     // +-------------------------------------+
     // |            IMX500Header             |
     // +-------------------------------------+
-    // | ApParamsHeader(output_tensor_header)|
+    // |    ApParamsHeader(tensor_header)    |
     // +-------------------------------------+
-    // |         Output Tensor Data          |
+    // |            Tensor Data              |
     // +-------------------------------------+
     uint32_t data_offset = 0;
     IMX500OutputHeader header;
     unpack_imx500_output_header(data, &header);
     data_offset += IMX500_HEADER_LEN;
-    uint32_t total_input_tensor_data_size = 1;
-    // 解析 ApParamsHeader(input_tensor_header) 并获取 Input Tensor Data 和 Output Tensor Data 大小
-    // const apParams::fb::FBApParams* ap_parameter = apParams::fb::GetFBApParams(data+data_offset);
-    // auto networks = ap_parameter->networks();
-    // auto network = networks->Get(0);
-    // auto input_tensors = network->inputTensors();
-    // auto output_tensors = network->outputTensors();
-    // data_offset += header.size_of_ap_parameter;
-
-    // printf("InputTensor num: %ld\n", input_tensors->size());
-    // for (int i = 0; i < input_tensors->size(); ++i) {
-        // printf("InputTensor%d scale   %f\n", i, input_tensors->Get(i)->scale());
-        // printf("InputTensor%d shift   %d\n", i, input_tensors->Get(i)->shift());
-        // printf("InputTensor%d format  %d\n", i, input_tensors->Get(i)->format());
-        // printf("InputTensor%d dim_num %d\n", i, input_tensors->Get(i)->numOfDimensions());
-        // printf("InputTensor%d shape   [", i);
-        // for(int j = 0; j < input_tensors->Get(i)->dimensions()->size(); ++j) {
-        //     int dim = input_tensors->Get(i)->dimensions()->Get(j)->size();
-        //     printf(" %d", dim);
-        //     total_input_tensor_data_size *= dim;
-        // }
-        // printf(" ]\n");
-    // }
-    // data_offset += total_input_tensor_data_size;
-    // printf("OutputTensor num: %ld\n", output_tensors->size());
-    // for (int i = 0; i < output_tensors->size(); ++i) {
-    //     printf("OutputTensor%d scale             %f\n", i, output_tensors->Get(i)->scale());
-    //     printf("OutputTensor%d shift             %d\n", i, output_tensors->Get(i)->shift());
-    //     printf("OutputTensor%d format            %d\n", i, output_tensors->Get(i)->format());
-    //     printf("OutputTensor%d bits_per_element  %d\n", i, output_tensors->Get(i)->bitsPerElement());
-    //     printf("OutputTensor%d dim_num           %d\n", i, output_tensors->Get(i)->numOfDimensions());
-    //     printf("OutputTensor%d shape   [", i);
-
-    //     for(int j = 0; j < output_tensors->Get(i)->dimensions()->size(); ++j) {
-    //         int dim = output_tensors->Get(i)->dimensions()->Get(j)->size();
-    //         printf(" %d", dim);
-    //     }
-    //     printf(" ]\n");
-    // }
     // 解析 ApParamsHeader(output_tensor_header)
     const apParams::fb::FBApParams* ap_parameter = apParams::fb::GetFBApParams(data+data_offset);
     auto networks = ap_parameter->networks();
@@ -178,4 +140,20 @@ void parseApParams(const uint8_t* data, DetectionResult* detection_result) {
         detection_result->valid_num += 1;
     }
 }
+
+uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w) {
+    uint32_t x_ = 0;
+    float s = (float)(t_w) / (float)(s_w);
+    x_ = MIN((uint32_t)(x*s), t_w);
+    return x_;
+}
+
+uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h) {
+    uint32_t y_ = 0;
+    float s = (float)(t_h) / (float)(s_h);
+    y_ = MIN((uint32_t)(y*s), t_h);
+    return y_;
+}
+
+
 }
