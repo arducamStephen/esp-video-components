@@ -2,6 +2,27 @@
 
 This is the repository for a some video related components, which aims to be uploaded to [IDF Component Registry](https://components.espressif.com/).
 
+
+## IMX500 Demo
+
+- Path: esp-video/examples/simple_video_server
+- Camera module: Arducam IMX500 Module
+- Model: YOLOv8n
+- Dataset: COCO80
+- Platform: ESP32-P4
+
+| esp32p4 GPIO | imx500 mcu module spi |
+|:-|:-|
+| 26 |sck |
+| 48 |rx |
+| 53 |tx |
+| 47 |cs |
+
+| Items | fps |
+|:-|:-|
+| frame（MIPI） | 30 |
+| metadata (SPI) | 10 |
+
 ## Component list in this project
 
 - esp_cam_sensor

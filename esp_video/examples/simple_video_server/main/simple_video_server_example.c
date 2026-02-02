@@ -987,7 +987,10 @@ static void metadata_parser_task(void *arg)
         }
 
         uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
-        parse_ap_params(metadata, &g_detection_result);
+        if(!parse_ap_params(metadata, frame.data_size, &g_detection_result)) {
+            // ESP_LOGW(TAG, "Parse Ap Params Failed.");
+            // skip
+        }
         // ESP_LOGI(TAG, "data_size: %d\n", frame.data_size);
     }
 }
