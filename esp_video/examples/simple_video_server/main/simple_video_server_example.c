@@ -948,28 +948,29 @@ err:
     return -1;
 }
 
-uint32_t read_metadata(uint8_t *r_buf, uint32_t max_len) {
+int read_metadata(uint8_t *r_buf, uint32_t max_len, uint32_t* data_size) {
 
-    uint32_t data_size = 0;
-    i2c_read_reg16_u32(METADATA_SIZE_REG, &data_size);
-    if (data_size > max_len) {
-        ESP_LOGE(TAG, "Error: data_size > max_data_r_buf_size: %lu > %lu\n", data_size, max_len);
-        return data_size;
+    i2c_read_reg16_u32(METADATA_SIZE_REG, data_size);
+    if (*data_size > max_len) {
+        ESP_LOGE(TAG, "Error: data_size > max_data_r_buf_size: %lu > %lu\n", *data_size, max_len);
+        return -2;  // data_size > max_data_r_buf_size
     }
     i2c_write_reg16_u32(CAPTURE_METADATA_REG, 1);
-    wait_metadata_ready();
+    if (!wait_metadata_ready()){
+        return -1;  // metadata not ready
+    }
     // ESP_LOGI(TAG, "starting spi read metadata ...\n");
-    spi_read(r_buf, data_size);
-    return data_size;
+    spi_read(r_buf, *data_size);
+    return 0;
 }
 
 static void metadata_reader_task(void *arg)
 {
     metadata_frame_t frame;
-
+    int ret;
     while (true) {
-        frame.data_size = read_metadata(metadata_buf, MAX_DATA_R_BUF_SIZE);
-        if (metadata_queue) {
+        ret = read_metadata(metadata_buf, MAX_DATA_R_BUF_SIZE, &frame.data_size);
+        if (metadata_queue && ret == 0) {
             xQueueSend(metadata_queue, &frame, portMAX_DELAY);
         }
     }
