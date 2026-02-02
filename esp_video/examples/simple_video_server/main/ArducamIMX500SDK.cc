@@ -50,7 +50,6 @@ extern "C" {
 #include <cstdio>
 #include "flatbuffers/flatbuffers.h"
 
-// 建议：返回 bool 表示是否成功解析
 bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* detection_result) {
     if (!data || !detection_result) {
         printf("parse_ap_params: null input\n");
@@ -66,13 +65,11 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
     unpack_imx500_output_header(data, &header);
     data_offset += IMX500_HEADER_LEN;
 
-    // 1) header.size_of_ap_parameter 必须合理
     if (header.size_of_ap_parameter == 0) {
         printf("ApParams size is 0\n");
         return false;
     }
 
-    // 2) 确保 ApParams 区间在 data_len 内
     if ((size_t)data_offset + (size_t)header.size_of_ap_parameter > data_len) {
         printf("ApParams out of range: offset=%lu size=%u data_len=%u\n",
                data_offset, header.size_of_ap_parameter, (unsigned)data_len);
@@ -82,9 +79,8 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
     const uint8_t* ap_buf = data + data_offset;
     size_t ap_len = header.size_of_ap_parameter;
 
-    // 3) FlatBuffers 验证（这是关键）
+    // FlatBuffers verify
     flatbuffers::Verifier verifier(ap_buf, ap_len);
-    // ⚠️ 函数名以你生成的 ApParams.h 为准
     if (!apParams::fb::VerifyFBApParamsBuffer(verifier)) {
         // printf("ApParams flatbuffer verify failed\n");
         return false;
@@ -119,7 +115,6 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
         return false;
     }
 
-    // 4) 输出 tensor 数据区起始偏移
     data_offset += header.size_of_ap_parameter;
     if ((size_t)data_offset > data_len) {
         printf("output tensor data offset out of range: %lu / %u\n",
@@ -161,7 +156,7 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
                 printf("tensor[%lu] dim[%lu] size=0\n", i, j);
                 return false;
             }
-            // 防溢出（很重要，ESP 上 uint32 溢出会变小）
+            // over prevention
             if (tensor_elements > (UINT32_MAX / s)) {
                 printf("tensor[%lu] elements overflow\n", i);
                 return false;
@@ -173,7 +168,6 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
         uint32_t tensor_bytes = (bits_per_element == 16) ? (tensor_elements * 2) : tensor_elements;
         uint32_t tensor_bytes_aligned = ALIGN_UP(tensor_bytes, 4);
 
-        // 5) 确保 output_tensor_data + offset 不越界（这里你原来完全没检查）
         if ((size_t)data_offset + (size_t)output_data_offset + (size_t)tensor_bytes_aligned > data_len) {
             printf("tensor[%lu] data out of range: off=%lu bytes=%lu aligned=%lu data_len=%u\n",
                    i, output_data_offset, tensor_bytes, tensor_bytes_aligned, (unsigned)data_len);
@@ -185,7 +179,6 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
         output_data_offset += tensor_bytes_aligned;
     }
 
-    // === 原逻辑继续 ===
     const auto* bbox_tensor = output_tensors->Get(0);
     const auto* score_tensor = output_tensors->Get(1);
     const auto* class_tensor = output_tensors->Get(2);
