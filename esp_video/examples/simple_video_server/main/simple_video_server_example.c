@@ -895,11 +895,66 @@ void init_spi_dev(uint32_t frame_len)
     );
 }
 
+// int32_t spi_read(uint8_t *buf, uint32_t size)
+// {
+//     if (!buf || size == 0) {
+//         return -1;
+//     }
+
+//     esp_err_t ret;
+//     uint32_t offset = 0;
+
+//     uint8_t *tx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
+//     uint8_t *rx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
+
+//     if (!tx_buf || !rx_buf) {
+//         ESP_LOGE(TAG, "DMA malloc failed\n");
+//         goto err;
+//     }
+
+//     memset(tx_buf, SPI_DUMMY_BYTE, SPI_MAX_DMA_BYTES);
+
+//     while (offset < size) {
+//         uint32_t chunk = size - offset;
+//         if (chunk > SPI_MAX_DMA_BYTES) {
+//             chunk = SPI_MAX_DMA_BYTES;
+//         }
+
+//         spi_transaction_t t = {
+//             .length    = chunk * 8,
+//             .rxlength  = chunk * 8,
+//             .tx_buffer = tx_buf,
+//             .rx_buffer = rx_buf,
+//             .flags     = 0,
+//         };
+
+//         ret = spi_device_polling_transmit(g_spi_dev, &t);
+//         if (ret != ESP_OK) {
+//             ESP_LOGE(TAG, "SPI read failed at offset %lu\n", offset);
+//             goto err;
+//         }
+
+//         memcpy(buf + offset, rx_buf, chunk);
+//         offset += chunk;
+//     }
+
+//     heap_caps_free(tx_buf);
+//     heap_caps_free(rx_buf);
+//     return size;
+
+// err:
+//     if (tx_buf) heap_caps_free(tx_buf);
+//     if (rx_buf) heap_caps_free(rx_buf);
+//     return -1;
+// }
+
 int32_t spi_read(uint8_t *buf, uint32_t size)
 {
     if (!buf || size == 0) {
         return -1;
     }
+
+    uint32_t size_ = size + VALID_DATA_OFFSET;
 
     esp_err_t ret;
     uint32_t offset = 0;
@@ -908,29 +963,31 @@ int32_t spi_read(uint8_t *buf, uint32_t size)
     uint8_t *rx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
 
     if (!tx_buf || !rx_buf) {
-        ESP_LOGE(TAG, "DMA malloc failed\n");
+        ESP_LOGE(TAG, "DMA malloc failed");
         goto err;
     }
 
     memset(tx_buf, SPI_DUMMY_BYTE, SPI_MAX_DMA_BYTES);
 
-    while (offset < size) {
-        uint32_t chunk = size - offset;
+    while (offset < size_) {
+        uint32_t chunk = size_ - offset;
         if (chunk > SPI_MAX_DMA_BYTES) {
             chunk = SPI_MAX_DMA_BYTES;
         }
+
+        bool is_last = (offset + chunk) >= size_;
 
         spi_transaction_t t = {
             .length    = chunk * 8,
             .rxlength  = chunk * 8,
             .tx_buffer = tx_buf,
             .rx_buffer = rx_buf,
-            .flags     = 0,
+            .flags     = is_last ? 0 : SPI_TRANS_CS_KEEP_ACTIVE,
         };
 
         ret = spi_device_polling_transmit(g_spi_dev, &t);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "SPI read failed at offset %lu\n", offset);
+            ESP_LOGE(TAG, "SPI read failed at offset %lu", offset);
             goto err;
         }
 
@@ -987,6 +1044,8 @@ static void metadata_parser_task(void *arg)
         }
 
         uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
+        // print_buf_hex(metadata, 12);
+        // printf("\n");
         if(!parse_ap_params(metadata, frame.data_size, &g_detection_result)) {
             // ESP_LOGW(TAG, "Parse Ap Params Failed.");
             // skip
@@ -1071,20 +1130,6 @@ void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
-    metadata_buf = (uint8_t *)malloc(MAX_DATA_R_BUF_SIZE);
-    if (!metadata_buf) {
-        ESP_LOGE(TAG, "Failed to allocate metadata buffer");
-        return;
-    }
-
-    metadata_queue = xQueueCreate(1, sizeof(metadata_frame_t));
-    if (!metadata_queue) {
-        ESP_LOGE(TAG, "Failed to create metadata queue");
-        return;
-    }
-
-    xTaskCreatePinnedToCore(metadata_reader_task, "metadata_reader", 4096, NULL, 5, NULL, 1);
-    xTaskCreatePinnedToCore(metadata_parser_task, "metadata_parser", 4096, NULL, 5, NULL, 0);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -1132,4 +1177,20 @@ void app_main(void)
     ESP_ERROR_CHECK(start_cam_web_server(config, config_count));
 
     ESP_LOGI(TAG, "Camera web server starts");
+
+    metadata_buf = (uint8_t *)malloc(MAX_DATA_R_BUF_SIZE);
+    if (!metadata_buf) {
+        ESP_LOGE(TAG, "Failed to allocate metadata buffer");
+        return;
+    }
+
+    metadata_queue = xQueueCreate(1, sizeof(metadata_frame_t));
+    if (!metadata_queue) {
+        ESP_LOGE(TAG, "Failed to create metadata queue");
+        return;
+    }
+
+    xTaskCreatePinnedToCore(metadata_reader_task, "metadata_reader", 4096, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(metadata_parser_task, "metadata_parser", 4096, NULL, 5, NULL, 0);
+
 }

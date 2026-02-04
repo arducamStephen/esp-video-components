@@ -1,7 +1,7 @@
 #ifndef ARDUCAM_IMX500_SDK_H_
 #define ARDUCAM_IMX500_SDK_H_
 
-#define VALID_DATA_OFFSET           0
+#define VALID_DATA_OFFSET           1
 #define IMX500_HEADER_LEN           12
 #define MAX_DETECT_ITEM_NUM         10
 
