@@ -3413,6 +3413,16 @@ int imx500_start_streaming(struct imx500 *imx500)
 	int ret = 0;
 	uint32_t dd_state = 0;
 
+	esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0710, 2); // start imx500 boot
+    uint32_t imx500_boot_status = 0;
+    while(1) {
+        esp_sccb_transmit_receive_reg_a16v32(imx500->sccb_handle, 0x0709, &imx500_boot_status);
+        if (imx500_boot_status == 1) break;
+        ESP_LOGI(TAG, "wait for imx500 module boot ... \n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+
 	// ret = pm_runtime_resume_and_get(&client->dev);
 	// if (ret < 0)
 	// 	return ret;
