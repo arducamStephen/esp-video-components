@@ -1121,14 +1121,6 @@ void app_main(void)
     init_i2c_dev();
     init_spi_dev(MAX_DATA_R_BUF_SIZE);
     init_detection_result_buf();
-    i2c_write_reg16_u32(START_BOOT_REG, 1); // start imx500 boot
-    uint32_t imx500_boot_status = 0;
-    while(1) {
-        i2c_read_reg16_u32(BOOT_STATUS_REG, &imx500_boot_status);
-        if (imx500_boot_status == 1) break;
-        ESP_LOGI(TAG, "wait for imx500 module boot ... \n");
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
