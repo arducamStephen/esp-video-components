@@ -3409,6 +3409,124 @@ int request_firmware(const struct firmware **fw, const char *name)
 int imx500_start_streaming(struct imx500 *imx500)
 {
 	int ret = 0;
+	uint32_t dd_state = 0;
+
+	esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0710, 2); // start imx500 boot
+    uint32_t imx500_boot_status = 0;
+    while(1) {
+        esp_sccb_transmit_receive_reg_a16v32(imx500->sccb_handle, 0x0709, &imx500_boot_status);
+        if (imx500_boot_status == 1) break;
+        ESP_LOGI(TAG, "wait for imx500 module boot ... \n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+
+	// ret = pm_runtime_resume_and_get(&client->dev);
+	// if (ret < 0)
+	// 	return ret;
+
+	
+
+#if 1
+    if (imx500->fw_network == NULL) {
+        
+        imx500->fw_network = imx500_network_posenet_data;//data;
+        imx500->fw_network_size = imx500_network_posenet_size;//size;
+        ESP_LOGI(TAG, "read network data=%p, size=%d", imx500_network_posenet_data, imx500_network_posenet_size);
+        imx500_calc_inference_lines(imx500);
+    }
+#endif
+
+	imx500ai_write(imx500->sccb_handle, IMX500_REG8(0x0103), 0x01); // reset
+	delay_ms(10);
+
+	ret = imx500ai_write(imx500->sccb_handle, IMX500_REG_IMAGE_ONLY_MODE,
+			imx500->fw_network ? IMX500_IMAGE_ONLY_FALSE : IMX500_IMAGE_ONLY_TRUE);
+	if (ret) {
+		ESP_LOGE(TAG, "%s failed to set image mode\n", __func__);
+		return ret;
+	}
+
+
+
+	/* Acquire loader and main firmware if needed */
+	if (imx500->fw_network) {
+		if (!imx500->fw_loader) {
+			ret = request_firmware(&imx500->fw_loader,
+					       "imx500_loader.fpk");
+			if (ret) {
+				ESP_LOGE(TAG, "Unable to acquire firmware loader\n");
+				return ret;
+			}
+			ESP_LOGI(TAG, "request loader data=%p, size=%d", imx500->fw_loader->data, imx500->fw_loader->size);
+		}
+		if (!imx500->fw_main) {
+			ret = request_firmware(&imx500->fw_main,
+					       "imx500_firmware.fpk");
+			if (ret) {
+				ESP_LOGE(TAG, "Unable to acquire main firmware\n");
+				return ret;
+			}
+			ESP_LOGI(TAG, "request main firmware data=%p, size=%d", imx500->fw_main->data, imx500->fw_main->size);
+		}
+	}
+
+	if (!imx500->common_regs_written) {
+		ret = imx500ai_multi_reg_write(imx500->sccb_handle, mode_common_regs,
+					  ARRAY_SIZE(mode_common_regs));
+
+		if (ret) {
+			ESP_LOGE(TAG, "%s failed to set common settings\n", __func__);
+			return ret;
+		}
+
+		imx500->common_regs_written = true;
+		// imx500ai_multi_reg_read(imx500->sccb_handle, mode_common_regs,
+		// 			  ARRAY_SIZE(mode_common_regs));
+	}
+
+
+	if (imx500->fw_network && !imx500->loader_and_main_written) {
+		ret = imx500_transition_to_standby_wo_network(imx500);
+		if (ret) {
+			ESP_LOGE(TAG, "%s failed to transition from program empty state\n", __func__);
+			return ret;
+		}
+		imx500->loader_and_main_written = true;
+	}
+
+	imx500ai_read(imx500->sccb_handle, IMX500_REG_DD_SYS_STATE, &dd_state);
+	ESP_LOGI(TAG, "IMX500_REG_DD_SYS_STATE 1 : %d\n", dd_state);
+
+	if (imx500->fw_network && !imx500->network_written) {
+		ret = imx500_transition_to_network(imx500);
+		if (ret) {
+			ESP_LOGE(TAG, "%s failed to transition to network loaded\n", __func__);
+			return ret;
+		}
+		imx500->network_written = true;
+	}
+
+	imx500ai_read(imx500->sccb_handle, IMX500_REG_DD_SYS_STATE, &dd_state);
+	ESP_LOGI(TAG, "IMX500_REG_DD_SYS_STATE 2 : %d\n", dd_state);
+
+
+	/* Enable DNN */
+	if (imx500->fw_network) {
+		ret = imx500ai_write(imx500->sccb_handle, IMX500_REG8(0xD100), 4);
+		if (ret) {
+			ESP_LOGE(TAG, "%s failed to enable DNN\n", __func__);
+			return ret;
+		}
+	}
+
+	/* Apply default values of current mode */
+	// reg_list = &imx500->mode->reg_list;
+	// ret = imx500ai_multi_reg_write(imx500->sccb_handle, mode_640x480_regs,
+	// 			  sizeof(mode_640x480_regs)/sizeof(mode_640x480_regs[0]));
+	// ret = imx500ai_multi_reg_write(imx500->sccb_handle, mode_2028x1520_regs,
+	// 			  sizeof(mode_2028x1520_regs)/sizeof(mode_2028x1520_regs[0]));
+
     ret = esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0200, 0x00000000);
     ret = esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0300, 0x00000000);
     ret = esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0100, 0x00000001);
