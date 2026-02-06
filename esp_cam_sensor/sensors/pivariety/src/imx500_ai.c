@@ -19,6 +19,9 @@
 // #include "sccb_i2c_internal.h"
 #include "esp_sccb_io_interface.h"
 #include "imx500_network.h"
+// #include "arducam_yolov8n_224x224.h"
+// #include "imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.h"
+#include "yolov8n_pose_512x512.h"
 
 
 /* Chip ID */
@@ -1983,11 +1986,24 @@ static const struct imx500_reg_sequence metadata_output[] = {
 #if 1
 static const struct imx500_reg_sequence dnn_regs[] = {
 
-	{ IMX500_REG8(0xD753), 0x01 }, // DNN_SPI_TRANSFER_INDICATION
-	{ IMX500_REG8(0xD754), 0x00 }, // DNN_SPI_TRANSFER_METHOD
-	{ IMX500_REG8(0xD755), 0x01 }, // DNN_RESULT_SPI_OUT (set in standby mode)
-	{ IMX500_REG8(0xD756), 0x01 }, // DNN_INPUT_SPI_OUT (set in standby mode)
-	// { IMX500_REG8(0x3052), 0x00 }, // MIPI_DATA_METADATA_OUT_SEL(set in standby mode)
+	// { IMX500_REG8(0xD753), 0x01 }, // DNN_SPI_TRANSFER_INDICATION
+	// { IMX500_REG8(0xD754), 0x00 }, // DNN_SPI_TRANSFER_METHOD
+	// { IMX500_REG8(0xD755), 0x01 }, // DNN_RESULT_SPI_OUT (set in standby mode)
+	// { IMX500_REG8(0xD756), 0x00 }, // DNN_INPUT_SPI_OUT (set in standby mode)
+
+	{IMX500_REG8(0xD754), 0x00      },  // DNN_SPI_TRANSFER_METHOD
+    {IMX500_REG8(0xD757), 0x03      },  // DNN_SPI_MODE
+    {IMX500_REG8(0xD758), 0x00      },  // DNN_SPI_FRAME_LEN  0 8bit | 1 16bit | 2 32bit
+    {IMX500_REG8(0xD759), 0x00      },  // DNN_SPI_FRAME_TOGGLE
+    {IMX500_REG8(0xD75A), 0x00      },  // PG_DATA_SPI_OUT
+    {IMX500_REG8(0xD761), 0x00      },  // HWA_RAW_DATA_THROUGH
+    {IMX500_REG32(0xD764), 0x00000000},  // DATA_SPI_MAX_TRANSFER_SIZE
+    {IMX500_REG8(0xD768), 0x00      },  // DNN_SPI_RESUME_SKIP_COUNT
+    {IMX500_REG8(0xDB34), 0x22      },  // IDAGC
+    {IMX500_REG8(0xD7FD), 128       },  // MIN_SPI_PACKET_LEN
+    {IMX500_REG8(0xD753), 0x01      },  // Enable spi output(ai metadata)
+    {IMX500_REG8(0xD755), 0x01      },  // spi output metadata include output tensor
+    {IMX500_REG8(0xD756), 0x00      },  // spi output metadata include no input tensor
 
 	{ IMX500_REG8(0xd960), 0x52 },
 	{ IMX500_REG8(0xd961), 0x52 },
@@ -3400,8 +3416,8 @@ int request_firmware(const struct firmware **fw, const char *name)
 /* Start streaming */
 int imx500_start_streaming(struct imx500 *imx500)
 {
-	uint32_t boot_mode = 1;  // 1 cam module selfboot | 2 i2c load nn boot
-
+	uint32_t boot_mode = 2;  // 1 cam module selfboot | 2 i2c load nn boot
+	esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0701, 34532); 
 	esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0710, boot_mode); // start imx500 boot
 	uint32_t imx500_boot_status = 0;
 	while(1) {
@@ -3415,9 +3431,13 @@ int imx500_start_streaming(struct imx500 *imx500)
 	uint32_t dd_state = 0;
 	if (boot_mode == 2) {
 		if (imx500->fw_network == NULL) {
-			imx500->fw_network = imx500_network_posenet_data;//data;
-			imx500->fw_network_size = imx500_network_posenet_size;//size;
-			ESP_LOGI(TAG, "read network data=%p, size=%d", imx500_network_posenet_data, imx500_network_posenet_size);
+			// imx500->fw_network = imx500_network_posenet_data;//data;
+			// imx500->fw_network_size = imx500_network_posenet_size;//size;
+
+			imx500->fw_network = yolov8n_pose_512x512_data;
+			imx500->fw_network_size = yolov8n_pose_512x512_size;
+
+			ESP_LOGI(TAG, "read network data=%p, size=%d", imx500->fw_network, imx500->fw_network_size);
 			imx500_calc_inference_lines(imx500);
 		}
 

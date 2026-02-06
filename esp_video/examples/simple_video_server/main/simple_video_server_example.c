@@ -853,7 +853,7 @@ static void initialise_mdns(void)
 bool wait_metadata_ready(void)
 {
     int64_t start_us = esp_timer_get_time();
-    const int64_t timeout_us = 10 * 1000 * 1000;
+    const int64_t timeout_us = 20 * 1000 * 1000;
     uint32_t data_ready_status = 0;  // 0 not ready | 1 ready
     while ((esp_timer_get_time() - start_us) < timeout_us) {
         i2c_read_reg16_u32(DATA_READY_STATUS_REG, &data_ready_status);
@@ -1044,8 +1044,8 @@ static void metadata_parser_task(void *arg)
         }
 
         uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
-        // print_buf_hex(metadata, 12);
-        // printf("\n");
+        print_buf_hex(metadata, 12);
+        printf("\n");
         if(!parse_ap_params(metadata, frame.data_size, &g_detection_result)) {
             // ESP_LOGW(TAG, "Parse Ap Params Failed.");
             // skip

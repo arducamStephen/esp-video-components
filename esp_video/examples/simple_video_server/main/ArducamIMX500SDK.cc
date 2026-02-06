@@ -161,16 +161,22 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
                 printf("tensor[%lu] elements overflow\n", i);
                 return false;
             }
+            printf("%lu ", s);
             tensor_elements *= s;
         }
+        printf("\n");
 
+        printf("tensor_elements: %ld\n", tensor_elements);
         uint8_t bits_per_element = t->bitsPerElement();
         uint32_t tensor_bytes = (bits_per_element == 16) ? (tensor_elements * 2) : tensor_elements;
         uint32_t tensor_bytes_aligned = ALIGN_UP(tensor_bytes, 4);
 
+        printf("tensor[%lu] data out of range: header_off(imx500_header_len + ap_params_header_len)=%lu off=%lu bytes=%lu aligned=%lu data_len=%u\n",
+                   i, data_offset, output_data_offset, tensor_bytes, tensor_bytes_aligned, (unsigned)data_len);
+
         if ((size_t)data_offset + (size_t)output_data_offset + (size_t)tensor_bytes_aligned > data_len) {
-            printf("tensor[%lu] data out of range: off=%lu bytes=%lu aligned=%lu data_len=%u\n",
-                   i, output_data_offset, tensor_bytes, tensor_bytes_aligned, (unsigned)data_len);
+            printf("tensor[%lu] data out of range: header_off(imx500_header_len + ap_params_header_len)=%lu off=%lu bytes=%lu aligned=%lu data_len=%u\n",
+                   i, data_offset, output_data_offset, tensor_bytes, tensor_bytes_aligned, (unsigned)data_len);
             return false;
         }
 
