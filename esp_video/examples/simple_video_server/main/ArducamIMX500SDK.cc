@@ -3,12 +3,18 @@
 #include <vector>
 #include "stdio.h"
 #include "string.h"
+#include <algorithm>
+#include "munkres.hpp"
 
 #define ALIGN_DOWN(size, align) ((size) & ~((align) - 1))
 #define ALIGN_UP(size, align)   (ALIGN_DOWN((size) + (align) - 1, (align)))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
+std::vector<const uint8_t*> s_output_tensor_ptrs;
+const ::flatbuffers::Vector<::flatbuffers::Offset<apParams::fb::FBOutputTensor>>* s_output_tensors_fb;
+DetectionResult g_d_result;
+PoseEstimationResult g_pe_result;
 
 int32_t print_buf_hex(const uint8_t* buf, uint32_t len) {
     uint32_t i;
@@ -50,8 +56,8 @@ extern "C" {
 #include <cstdio>
 #include "flatbuffers/flatbuffers.h"
 
-bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* detection_result) {
-    if (!data || !detection_result) {
+bool parse_ap_params(const uint8_t* data, size_t data_len) {
+    if (!data) {
         printf("parse_ap_params: null input\n");
         return false;
     }
@@ -104,14 +110,9 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
         return false;
     }
 
-    auto output_tensors = network->outputTensors();
-    if (!output_tensors) {
+    s_output_tensors_fb = network->outputTensors();
+    if (!s_output_tensors_fb) {
         printf("outputTensors is null (schema mismatch or field missing)\n");
-        return false;
-    }
-
-    if (output_tensors->size() < 4) {
-        printf("OutputTensor num is insufficient: %lu\n", (unsigned long)output_tensors->size());
         return false;
     }
 
@@ -124,15 +125,15 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
 
     const uint8_t* output_tensor_data = data + data_offset;
 
-    std::vector<const uint8_t*> output_tensor_ptrs;
     std::vector<uint32_t> output_tensor_sizes;
-    output_tensor_ptrs.reserve(output_tensors->size());
-    output_tensor_sizes.reserve(output_tensors->size());
+    s_output_tensor_ptrs.clear();
+    s_output_tensor_ptrs.reserve(s_output_tensors_fb->size());
+    output_tensor_sizes.reserve(s_output_tensors_fb->size());
 
     uint32_t output_data_offset = 0;
 
-    for (uint32_t i = 0; i < output_tensors->size(); ++i) {
-        auto t = output_tensors->Get(i);
+    for (uint32_t i = 0; i < s_output_tensors_fb->size(); ++i) {
+        auto t = s_output_tensors_fb->Get(i);
         if (!t) {
             printf("output_tensors[%lu] is null\n", i);
             return false;
@@ -161,81 +162,161 @@ bool parse_ap_params(const uint8_t* data, size_t data_len, DetectionResult* dete
                 printf("tensor[%lu] elements overflow\n", i);
                 return false;
             }
-            printf("%lu ", s);
             tensor_elements *= s;
         }
-        printf("\n");
 
-        printf("tensor_elements: %ld\n", tensor_elements);
         uint8_t bits_per_element = t->bitsPerElement();
         uint32_t tensor_bytes = (bits_per_element == 16) ? (tensor_elements * 2) : tensor_elements;
         uint32_t tensor_bytes_aligned = ALIGN_UP(tensor_bytes, 4);
 
-        printf("tensor[%lu] data out of range: header_off(imx500_header_len + ap_params_header_len)=%lu off=%lu bytes=%lu aligned=%lu data_len=%u\n",
-                   i, data_offset, output_data_offset, tensor_bytes, tensor_bytes_aligned, (unsigned)data_len);
-
         if ((size_t)data_offset + (size_t)output_data_offset + (size_t)tensor_bytes_aligned > data_len) {
-            printf("tensor[%lu] data out of range: header_off(imx500_header_len + ap_params_header_len)=%lu off=%lu bytes=%lu aligned=%lu data_len=%u\n",
-                   i, data_offset, output_data_offset, tensor_bytes, tensor_bytes_aligned, (unsigned)data_len);
+            printf("tensor[%lu] data out of range: header_off(imx500_header_len + ap_params_header_len)=%lu off=%lu tensor_elements=%lu bytes=%lu aligned=%lu data_len=%u\n",
+                   i, data_offset, output_data_offset, tensor_elements, tensor_bytes, tensor_bytes_aligned, (unsigned)data_len);
             return false;
         }
 
-        output_tensor_ptrs.push_back(output_tensor_data + output_data_offset);
+        s_output_tensor_ptrs.push_back(output_tensor_data + output_data_offset);
         output_tensor_sizes.push_back(tensor_elements);
         output_data_offset += tensor_bytes_aligned;
     }
 
-    const auto* bbox_tensor = output_tensors->Get(0);
-    const auto* score_tensor = output_tensors->Get(1);
-    const auto* class_tensor = output_tensors->Get(2);
-    const auto* detect_num_tensor = output_tensors->Get(3);
+    return true;
+}
 
-    const auto* bbox_data = reinterpret_cast<const int16_t*>(output_tensor_ptrs[0]);
-    const auto* score_data = reinterpret_cast<const uint8_t*>(output_tensor_ptrs[1]);
-    const auto* class_data = reinterpret_cast<const int16_t*>(output_tensor_ptrs[2]);
-    const auto* detect_num_data = reinterpret_cast<const int16_t*>(output_tensor_ptrs[3]);
+void print_pose_estimation_result(void) {
+    auto result = &g_pe_result;
+    if (!result) {
+        printf("[Pose] result is NULL\n");
+        return;
+    }
 
-    uint32_t bbox_elements = output_tensor_sizes[0];
-    uint32_t bbox_stride = bbox_elements / 4;
-    if (bbox_stride == 0) {
-        printf("OutputTensor bbox stride is invalid: %lu\n", (unsigned long)bbox_elements);
+    printf("========== PoseEstimationResult ==========\n");
+    printf("Valid num: %u\n", result->valid_num);
+
+    for (uint16_t i = 0; i < result->valid_num; ++i) {
+        printf("\n--- Person %u ---\n", i);
+
+        const PoseKeyPoints* pose = &result->kps_group[i];
+
+        for (int kp = 0; kp < 17; ++kp) {
+            const KeyPoint* k = &pose->data[kp];
+            printf(
+                "  KP[%02d]: x=%7.2f  y=%7.2f  score=%.3f\n",
+                kp, k->x1, k->y1, k->score
+            );
+        }
+
+        /* 如果你后面需要一起打印 bbox */
+        const BBox* b = &result->bboxs[i];
+        printf(
+            "  BBox: x1=%f y1=%f x2=%f y2=%f score=%.3f\n",
+            b->x1, b->y1, b->x2, b->y2, b->score
+        );
+    }
+
+    printf("==========================================\n");
+}
+
+
+bool pose_estimate_postprocess_higherhrnet(void) {
+
+    if (!s_output_tensors_fb) {
+        printf("outputTensors is null (schema mismatch or field missing)\n");
         return false;
     }
 
-    uint32_t score_elements = output_tensor_sizes[1];
-    uint32_t class_elements = output_tensor_sizes[2];
-    uint32_t detect_num = detect_num_data ? (uint32_t)detect_num_data[0] : 0;
-
-    uint32_t max_items = std::min({bbox_stride, score_elements, class_elements, detect_num, (uint32_t)MAX_DETECT_ITEM_NUM});
-
-    auto bboxs = detection_result->bboxs;
-    detection_result->valid_num = 0;
-
-    const float confidence_threshold = 0.1f;
-    for (uint32_t i = 0; i < max_items; ++i) {
-        float confidence = (static_cast<float>(score_data[i]) - score_tensor->shift()) * score_tensor->scale();
-        if (confidence < confidence_threshold) continue;
-
-        float xmin = (static_cast<float>(bbox_data[i]) - bbox_tensor->shift()) * bbox_tensor->scale();
-        float ymin = (static_cast<float>(bbox_data[i + bbox_stride]) - bbox_tensor->shift()) * bbox_tensor->scale();
-        float xmax = (static_cast<float>(bbox_data[i + bbox_stride * 2]) - bbox_tensor->shift()) * bbox_tensor->scale();
-        float ymax = (static_cast<float>(bbox_data[i + bbox_stride * 3]) - bbox_tensor->shift()) * bbox_tensor->scale();
-        uint32_t class_id = (uint32_t)((static_cast<float>(class_data[i]) - class_tensor->shift()) * class_tensor->scale());
-
-        bboxs->class_id = class_id;
-        bboxs->score = confidence;
-        bboxs->x1 = xmin;
-        bboxs->y1 = ymin;
-        bboxs->x2 = xmax;
-        bboxs->y2 = ymax;
-
-        printf("box[%lu]: xmin=%0.2f ymin=%0.2f xmax=%0.2f ymax=%0.2f cls_id=%lu score=%0.3f\n",
-               (unsigned long)i, xmin, ymin, xmax, ymax, (unsigned long)class_id, confidence);
-
-        bboxs++;
-        detection_result->valid_num++;
+    if (s_output_tensors_fb->size() != 3) {
+        printf("OutputTensor num is insufficient: %lu\n", (unsigned long)s_output_tensors_fb->size());
+        return false;
     }
 
+
+    const auto* raw_tag = s_output_tensors_fb->Get(0);
+    const auto* raw_ind = s_output_tensors_fb->Get(1);
+    const auto* raw_val = s_output_tensors_fb->Get(2);
+
+    const auto* raw_tag_data = reinterpret_cast<const int8_t*>(s_output_tensor_ptrs[0]);
+    const auto* raw_ind_data = reinterpret_cast<const int32_t*>(s_output_tensor_ptrs[1]);
+    const auto* raw_val_data = reinterpret_cast<const int8_t*>(s_output_tensor_ptrs[2]);
+
+    auto max_num_people = raw_tag->dimensions()->Get(0)->size();
+    auto num_joints = raw_tag->dimensions()->Get(1)->size();
+
+    auto kps_group = g_pe_result.kps_group;
+    auto bboxs = g_pe_result.bboxs;
+    g_pe_result.valid_num = 0;
+
+    const float confidence_threshold = 0.1f;
+    HigherHRNetOutput higherhrnet_output;
+    higherhrnet_output.tag.resize(num_joints, std::vector<float>(max_num_people, 0.f));
+    higherhrnet_output.ind.resize(num_joints, std::vector<int32_t>(max_num_people, 0));
+    higherhrnet_output.val.resize(num_joints, std::vector<float>(max_num_people, 0.f));
+
+    for (uint32_t i = 0; i < max_num_people; ++i) {
+        higherhrnet_output.tag[i / max_num_people][i % max_num_people] = (static_cast<float>(raw_tag_data[i]) - raw_tag->shift()) * raw_tag->scale();
+        higherhrnet_output.ind[i / max_num_people][i % max_num_people] = static_cast<int>(raw_ind_data[i]);
+        higherhrnet_output.val[i / max_num_people][i % max_num_people] = (static_cast<float>(raw_val_data[i]) - raw_val->shift()) * raw_val->scale();
+    }
+
+    // 定义各尺寸（单位均为像素）：  
+    // 原图尺寸
+    std::pair<int, int> img_size = { 288, 384 };        // (height, width)
+    // pad 值（假设左右各 0，顶部、底部均 0）
+    std::pair<int, int> img_w_pad = { 0, 0 };
+    std::pair<int, int> img_h_pad = { 0, 0 };
+    // 网络输入尺寸（例如 288 x 384）与输出特征图尺寸（例如 144 x 192）
+    std::pair<int, int> input_image_size = { 288, 384 };
+    std::pair<int, int> output_shape = { 144, 192 };
+    auto result_ = postprocess_higherhrnet(
+        higherhrnet_output, 
+        img_size, img_w_pad, img_h_pad,
+        confidence_threshold, true,
+        input_image_size, output_shape);
+    auto keypoints_ = std::get<0>(result_);
+    auto scores_ = std::get<1>(result_);
+    auto boxes_ = std::get<2>(result_);
+
+    uint32_t max_items = std::min({(uint32_t)keypoints_.size(), (uint32_t)MAX_DETECT_ITEM_NUM});
+
+    for (uint32_t i = 0; i < max_items; ++i) {
+        if (scores_[i] < confidence_threshold) continue;
+        bboxs[i].class_id = 0;
+        bboxs[i].score = scores_[i];
+        bboxs[i].x1 = MIN(MAX(0, boxes_[i][0]), 384);
+        bboxs[i].y1 = MIN(MAX(0, boxes_[i][1]), 288);
+        bboxs[i].x2 = MIN(MAX(0, boxes_[i][2]), 384);
+        bboxs[i].y2 = MIN(MAX(0, boxes_[i][3]), 288);
+
+        for(int j = 0; j < num_joints; ++i) {
+            kps_group[i].data[j].x1 = keypoints_[i][0];
+            kps_group[i].data[j].y1 = keypoints_[i][1];
+            kps_group[i].data[j].score = keypoints_[i][2];
+        }
+        
+        g_pe_result.valid_num += 1;
+    }
+    //     float confidence = (static_cast<float>(score_data[i]) - score_tensor->shift()) * score_tensor->scale();
+    //     if (confidence < confidence_threshold) continue;
+
+    //     float xmin = (static_cast<float>(bbox_data[i]) - bbox_tensor->shift()) * bbox_tensor->scale();
+    //     float ymin = (static_cast<float>(bbox_data[i + bbox_stride]) - bbox_tensor->shift()) * bbox_tensor->scale();
+    //     float xmax = (static_cast<float>(bbox_data[i + bbox_stride * 2]) - bbox_tensor->shift()) * bbox_tensor->scale();
+    //     float ymax = (static_cast<float>(bbox_data[i + bbox_stride * 3]) - bbox_tensor->shift()) * bbox_tensor->scale();
+    //     uint32_t class_id = (uint32_t)((static_cast<float>(class_data[i]) - class_tensor->shift()) * class_tensor->scale());
+
+    //     bboxs->class_id = class_id;
+    //     bboxs->score = confidence;
+    //     bboxs->x1 = xmin;
+    //     bboxs->y1 = ymin;
+    //     bboxs->x2 = xmax;
+    //     bboxs->y2 = ymax;
+
+    //     printf("box[%lu]: xmin=%0.2f ymin=%0.2f xmax=%0.2f ymax=%0.2f cls_id=%lu score=%0.3f\n",
+    //            (unsigned long)i, xmin, ymin, xmax, ymax, (unsigned long)class_id, confidence);
+
+    //     bboxs++;
+    //     detection_result->valid_num++;
+    // }
     return true;
 }
 

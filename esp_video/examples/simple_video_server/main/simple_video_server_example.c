@@ -45,9 +45,6 @@
 #define PIN_NUM_CLK              GPIO_NUM_26
 #define PIN_NUM_CS               GPIO_NUM_47
 
-// ai
-BBox g_bboxs[MAX_DETECT_ITEM_NUM];
-DetectionResult g_detection_result;
 // bus
 static i2c_master_bus_handle_t g_bus_handle;
 static i2c_master_dev_handle_t g_client_handle;
@@ -55,7 +52,7 @@ static spi_device_handle_t g_spi_dev;
 // dev
 esp_err_t init_isp_dev(int cam_fd);
 void init_detection_result_buf(void);
-void init_spi_dev(uint32_t frame_len);
+void init_spi_dev(void);
 void init_i2c_dev(void);
 esp_err_t i2c_write_reg16_u32(uint16_t reg, uint32_t value);
 esp_err_t i2c_read_reg16_u32(uint16_t reg,uint32_t *out);
@@ -470,17 +467,17 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
 
         ESP_GOTO_ON_ERROR(httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY)), fail0, TAG, "failed to send boundary");
         
-        auto bboxs = g_detection_result.bboxs;
-        if (g_detection_result.valid_num > 0) {
-                draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-                    bbox_coordinate_x_scale_map(bboxs[0].x1, 224, 1920),
-                    bbox_coordinate_x_scale_map(bboxs[0].y1, 224, 1080),
-                    bbox_coordinate_x_scale_map(bboxs[0].x2, 224, 1920), 
-                    bbox_coordinate_x_scale_map(bboxs[0].y2, 224, 1080),
-                    0, 0, 255, 0, 0, 20, false);
+        auto bboxs = g_d_result.bboxs;
+        if (g_d_result.valid_num > 0) {
+                // draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                //     bbox_coordinate_x_scale_map(bboxs[0].x1, 224, 1920),
+                //     bbox_coordinate_x_scale_map(bboxs[0].y1, 224, 1080),
+                //     bbox_coordinate_x_scale_map(bboxs[0].x2, 224, 1920), 
+                //     bbox_coordinate_x_scale_map(bboxs[0].y2, 224, 1080),
+                //     0, 0, 255, 0, 0, 20, false);
         }
 
-        // for (int i = 0; i < g_detection_result.valid_num; ++i) {
+        // for (int i = 0; i < g_d_result.valid_num; ++i) {
         //     //Draw a rectangle with specified RGB color on a buffer
         //     draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
         //             bbox_coordinate_x_scale_map(bboxs[i].x1, 224, 1920),
@@ -867,7 +864,7 @@ bool wait_metadata_ready(void)
     return false;
 }
 
-void init_spi_dev(uint32_t frame_len)
+void init_spi_dev()
 {
     spi_bus_config_t buscfg = {
         .mosi_io_num = PIN_NUM_MOSI,
@@ -875,24 +872,60 @@ void init_spi_dev(uint32_t frame_len)
         .sclk_io_num = PIN_NUM_CLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = frame_len,
+        .max_transfer_sz = 4096,
+    };
+
+    spi_device_interface_config_t devcfg = {
+        .clock_speed_hz = 5 * 1000 * 1000,
+        .mode = 3,
+        .spics_io_num = -1,
+        .queue_size = 1,
     };
 
     ESP_ERROR_CHECK(
         spi_bus_initialize(SPI_HOST, &buscfg, SPI_DMA_CH_AUTO)
     );
 
-    spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = 5 * 1000 * 1000,
-        .mode = 0,
-        .spics_io_num = PIN_NUM_CS,
-        .queue_size = 1,
-        .flags = 0,
-    };
-
     ESP_ERROR_CHECK(
         spi_bus_add_device(SPI_HOST, &devcfg, &g_spi_dev)
     );
+
+    gpio_config_t cs_cfg = {
+        .pin_bit_mask = 1ULL << PIN_NUM_CS,
+        .mode = GPIO_MODE_OUTPUT,
+    };
+
+    gpio_config(&cs_cfg);
+    gpio_set_level(PIN_NUM_CS, 1); // CS idle high
+    // while (1)
+    // {
+    //     gpio_set_level(PIN_NUM_CS, 1); // CS idle high
+    //     gpio_set_level(PIN_NUM_CS, 0); // CS idle high
+    // }
+    
+
+}
+
+void spi_read_dma(uint8_t *rx_buf, size_t len)
+{
+    static uint8_t dummy_tx[4096];
+
+    if (len > sizeof(dummy_tx)) {
+        ESP_LOGE("SPI", "len too large");
+        return;
+    }
+
+    memset(dummy_tx, 0x00, len);
+
+    spi_transaction_t t = {
+        .length = len * 8,   // bits
+        .tx_buffer = dummy_tx,
+        .rx_buffer = rx_buf,
+    };
+
+    gpio_set_level(PIN_NUM_CS, 0);          // CS ↓
+    // ESP_ERROR_CHECK(spi_device_transmit(g_spi_dev, &t));
+    gpio_set_level(PIN_NUM_CS, 1);          // CS ↑
 }
 
 // int32_t spi_read(uint8_t *buf, uint32_t size)
@@ -948,62 +981,62 @@ void init_spi_dev(uint32_t frame_len)
 //     return -1;
 // }
 
-int32_t spi_read(uint8_t *buf, uint32_t size)
-{
-    if (!buf || size == 0) {
-        return -1;
-    }
+// int32_t spi_read(uint8_t *buf, uint32_t size)
+// {
+//     if (!buf || size == 0) {
+//         return -1;
+//     }
 
-    uint32_t size_ = size + VALID_DATA_OFFSET;
+//     uint32_t size_ = size + VALID_DATA_OFFSET;
 
-    esp_err_t ret;
-    uint32_t offset = 0;
+//     esp_err_t ret;
+//     uint32_t offset = 0;
 
-    uint8_t *tx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
-    uint8_t *rx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
+//     uint8_t *tx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
+//     uint8_t *rx_buf = heap_caps_malloc(SPI_MAX_DMA_BYTES, MALLOC_CAP_DMA);
 
-    if (!tx_buf || !rx_buf) {
-        ESP_LOGE(TAG, "DMA malloc failed");
-        goto err;
-    }
+//     if (!tx_buf || !rx_buf) {
+//         ESP_LOGE(TAG, "DMA malloc failed");
+//         goto err;
+//     }
 
-    memset(tx_buf, SPI_DUMMY_BYTE, SPI_MAX_DMA_BYTES);
+//     memset(tx_buf, SPI_DUMMY_BYTE, SPI_MAX_DMA_BYTES);
 
-    while (offset < size_) {
-        uint32_t chunk = size_ - offset;
-        if (chunk > SPI_MAX_DMA_BYTES) {
-            chunk = SPI_MAX_DMA_BYTES;
-        }
+//     while (offset < size_) {
+//         uint32_t chunk = size_ - offset;
+//         if (chunk > SPI_MAX_DMA_BYTES) {
+//             chunk = SPI_MAX_DMA_BYTES;
+//         }
 
-        bool is_last = (offset + chunk) >= size_;
+//         bool is_last = (offset + chunk) >= size_;
 
-        spi_transaction_t t = {
-            .length    = chunk * 8,
-            .rxlength  = chunk * 8,
-            .tx_buffer = tx_buf,
-            .rx_buffer = rx_buf,
-            .flags     = is_last ? 0 : SPI_TRANS_CS_KEEP_ACTIVE,
-        };
+//         spi_transaction_t t = {
+//             .length    = chunk * 8,
+//             .rxlength  = chunk * 8,
+//             .tx_buffer = tx_buf,
+//             .rx_buffer = rx_buf,
+//             .flags     = is_last ? 0 : SPI_TRANS_CS_KEEP_ACTIVE,
+//         };
 
-        ret = spi_device_polling_transmit(g_spi_dev, &t);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "SPI read failed at offset %lu", offset);
-            goto err;
-        }
+//         ret = spi_device_polling_transmit(g_spi_dev, &t);
+//         if (ret != ESP_OK) {
+//             ESP_LOGE(TAG, "SPI read failed at offset %lu", offset);
+//             goto err;
+//         }
 
-        memcpy(buf + offset, rx_buf, chunk);
-        offset += chunk;
-    }
+//         memcpy(buf + offset, rx_buf, chunk);
+//         offset += chunk;
+//     }
 
-    heap_caps_free(tx_buf);
-    heap_caps_free(rx_buf);
-    return size;
+//     heap_caps_free(tx_buf);
+//     heap_caps_free(rx_buf);
+//     return size;
 
-err:
-    if (tx_buf) heap_caps_free(tx_buf);
-    if (rx_buf) heap_caps_free(rx_buf);
-    return -1;
-}
+// err:
+//     if (tx_buf) heap_caps_free(tx_buf);
+//     if (rx_buf) heap_caps_free(rx_buf);
+//     return -1;
+// }
 
 int read_metadata(uint8_t *r_buf, uint32_t max_len, uint32_t* data_size) {
 
@@ -1017,7 +1050,7 @@ int read_metadata(uint8_t *r_buf, uint32_t max_len, uint32_t* data_size) {
         return -1;  // metadata not ready
     }
     // ESP_LOGI(TAG, "starting spi read metadata ...\n");
-    spi_read(r_buf, *data_size);
+    spi_read_dma(r_buf, *data_size);
     return 0;
 }
 
@@ -1046,16 +1079,14 @@ static void metadata_parser_task(void *arg)
         uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
         print_buf_hex(metadata, 12);
         printf("\n");
-        if(!parse_ap_params(metadata, frame.data_size, &g_detection_result)) {
+        if(!parse_ap_params(metadata, frame.data_size)) {
+            pose_estimate_postprocess_higherhrnet();
+            print_pose_estimation_result();
             // ESP_LOGW(TAG, "Parse Ap Params Failed.");
             // skip
         }
         // ESP_LOGI(TAG, "data_size: %d\n", frame.data_size);
     }
-}
-
-void init_detection_result_buf(void) {
-    g_detection_result.bboxs = g_bboxs;
 }
 
 void init_i2c_dev(void) {
@@ -1119,8 +1150,18 @@ void app_main(void)
 
     ESP_ERROR_CHECK(example_video_init());
     init_i2c_dev();
-    init_spi_dev(MAX_DATA_R_BUF_SIZE);
-    init_detection_result_buf();
+    // init_spi_dev();
+    gpio_reset_pin(PIN_NUM_CS);
+    /* Set the GPIO as a push/pull output */
+    gpio_set_direction(PIN_NUM_CS, GPIO_MODE_OUTPUT);
+
+    while (1)
+    {
+        gpio_set_level(PIN_NUM_CS, 1); // CS idle high
+        vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level(PIN_NUM_CS, 0); // CS idle high
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());

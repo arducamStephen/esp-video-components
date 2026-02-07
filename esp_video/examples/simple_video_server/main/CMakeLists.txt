@@ -3,6 +3,7 @@ set(srcs
         "app_isp.c" 
         "app_drawing_utils.c"
         "ArducamIMX500SDK.cc"
+        "utils.cc"
         )
 
 set(incs 
