@@ -885,7 +885,7 @@ void init_spi_dev(uint32_t frame_len)
     spi_device_interface_config_t devcfg = {
         .clock_speed_hz = 5 * 1000 * 1000,
         .mode = 0,
-        .spics_io_num = PIN_NUM_CS,
+        .spics_io_num = -1,
         .queue_size = 1,
         .flags = 0,
     };
@@ -893,6 +893,18 @@ void init_spi_dev(uint32_t frame_len)
     ESP_ERROR_CHECK(
         spi_bus_add_device(SPI_HOST, &devcfg, &g_spi_dev)
     );
+
+    gpio_config_t io_config = {
+        .pin_bit_mask = (1ULL << PIN_NUM_CS),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE
+    };
+
+    gpio_config(&io_config);
+    gpio_set_level(PIN_NUM_CS, 1);
+
 }
 
 // int32_t spi_read(uint8_t *buf, uint32_t size)
@@ -1121,6 +1133,17 @@ void app_main(void)
     init_i2c_dev();
     init_spi_dev(MAX_DATA_R_BUF_SIZE);
     init_detection_result_buf();
+
+    while (1)
+    {
+       gpio_set_level(PIN_NUM_CS, 1);
+       ESP_LOGI(TAG, "CS UP");
+       vTaskDelay(pdMS_TO_TICKS(10));
+       gpio_set_level(PIN_NUM_CS, 0);
+       ESP_LOGI(TAG, "CS DOWN");
+       vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
