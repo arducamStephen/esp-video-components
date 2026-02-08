@@ -3525,7 +3525,7 @@ int imx500_start_streaming(struct imx500 *imx500)
 
     ret = esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0200, 0x00000000);
     ret = esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0300, 0x00000000);
-    ret = esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0100, 0x00000001);
+	ret = imx500ai_write(imx500->sccb_handle, IMX500_REG8(0x0100), 0x01);
 
 	return ret;
 }

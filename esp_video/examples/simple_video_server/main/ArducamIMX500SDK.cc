@@ -183,6 +183,59 @@ bool parse_ap_params(const uint8_t* data, size_t data_len) {
     return true;
 }
 
+bool detect_postprocess_yolov8n(void) {
+    if (!s_output_tensors_fb) {
+        printf("[D] outputTensors is null\n");
+        return false;
+    }
+
+    if (s_output_tensors_fb->size() != 4) {
+        printf("[D] OutputTensor num error: %lu\n",
+               (unsigned long)s_output_tensors_fb->size());
+        return false;
+    }
+
+    const auto* bbox_tensor = s_output_tensors_fb->Get(0);
+    const auto* score_tensor = s_output_tensors_fb->Get(1);
+    const auto* class_tensor = s_output_tensors_fb->Get(2);
+    const auto* detect_num_tensor = s_output_tensors_fb->Get(3);
+
+    const auto* bbox_data = reinterpret_cast<const int16_t*>(s_output_tensor_ptrs[0]);
+    const auto* score_data = reinterpret_cast<const uint8_t*>(s_output_tensor_ptrs[1]);
+    const auto* class_data = reinterpret_cast<const int16_t*>(s_output_tensor_ptrs[2]);
+    const auto* detect_num_data = reinterpret_cast<const int16_t*>(s_output_tensor_ptrs[3]);
+    uint32_t detect_num = detect_num_data ? (uint32_t)detect_num_data[0] : 0;
+    uint32_t max_items = std::min({detect_num, (uint32_t)MAX_DETECT_ITEM_NUM});
+    g_d_result.valid_num = 0;
+    auto bboxs = g_d_result.bboxs;
+    const float confidence_threshold = 0.1f;
+    for (uint32_t i = 0; i < max_items; ++i) {
+        float confidence = (static_cast<float>(score_data[i]) - score_tensor->shift()) * score_tensor->scale();
+        if (confidence < confidence_threshold) continue;
+
+        float xmin = (static_cast<float>(bbox_data[i]) - bbox_tensor->shift()) * bbox_tensor->scale();
+        float ymin = (static_cast<float>(bbox_data[i + 300]) - bbox_tensor->shift()) * bbox_tensor->scale();
+        float xmax = (static_cast<float>(bbox_data[i + 300 * 2]) - bbox_tensor->shift()) * bbox_tensor->scale();
+        float ymax = (static_cast<float>(bbox_data[i + 300 * 3]) - bbox_tensor->shift()) * bbox_tensor->scale();
+        uint32_t class_id = (uint32_t)((static_cast<float>(class_data[i]) - class_tensor->shift()) * class_tensor->scale());
+
+        bboxs->class_id = class_id;
+        bboxs->score = confidence;
+        bboxs->x1 = xmin;
+        bboxs->y1 = ymin;
+        bboxs->x2 = xmax;
+        bboxs->y2 = ymax;
+
+        printf("box[%lu]: xmin=%0.2f ymin=%0.2f xmax=%0.2f ymax=%0.2f cls_id=%lu score=%0.3f\n",
+               (unsigned long)i, xmin, ymin, xmax, ymax, (unsigned long)class_id, confidence);
+
+        bboxs++;
+        g_d_result.valid_num++;
+    }
+
+    return true;
+}
+
 void print_pose_estimation_result(void) {
     auto result = &g_pe_result;
     if (!result) {

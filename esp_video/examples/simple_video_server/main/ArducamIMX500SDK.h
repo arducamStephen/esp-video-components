@@ -75,6 +75,7 @@ void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header
 bool parse_ap_params(const uint8_t* data, size_t data_len);
 void print_pose_estimation_result(void);
 bool pose_estimate_postprocess_higherhrnet(void);
+bool detect_postprocess_yolov8n(void);
 int32_t print_buf_hex(const uint8_t* buf, uint32_t len);
 uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w);
 uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
