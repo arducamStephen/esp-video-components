@@ -468,36 +468,36 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
         ESP_GOTO_ON_ERROR(httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY)), fail0, TAG, "failed to send boundary");
         
         // yolov8n
-        BBox* bboxs = g_d_result.bboxs;
-        if (g_d_result.valid_num > 0) {
-            for (int i=0; i < g_d_result.valid_num; ++i){
-                    draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-                        bbox_coordinate_x_scale_map(bboxs[i].x1, 224, 1920),
-                        bbox_coordinate_x_scale_map(bboxs[i].y1, 224, 1080),
-                        bbox_coordinate_x_scale_map(bboxs[i].x2, 224, 1920), 
-                        bbox_coordinate_x_scale_map(bboxs[i].y2, 224, 1080),
-                        0, 0, 255, 0, 0, 20, false);
-                }
-        }
-        // higherhrnet
-        // PoseKeyPoints* kps_group = g_pe_result.kps_group;
-        // BBox* bboxs = g_pe_result.bboxs;
-        // for (int i=0; i<g_pe_result.valid_num; ++i) {
-        //     draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-        //             bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1920),
-        //             bbox_coordinate_x_scale_map((int)(bboxs[i].y1), 288, 1080),
-        //             bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1920), 
-        //             bbox_coordinate_x_scale_map((int)(bboxs[i].y2), 288, 1080),
-        //             0, 0, 255, 0, 0, 20, false);
-        //     for (int j=0; j < 17; ++j) {
-        //         draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-        //                 bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1920),
-        //                 bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1), 288, 1080),
-        //                 bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1)+2, 384, 1920), 
-        //                 bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1)+2, 288, 1080),
+        // BBox* bboxs = g_d_result.bboxs;
+        // if (g_d_result.valid_num > 0) {
+        //     for (int i=0; i < g_d_result.valid_num; ++i){
+        //             draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+        //                 bbox_coordinate_x_scale_map(bboxs[i].x1, 224, 1920),
+        //                 bbox_coordinate_x_scale_map(bboxs[i].y1, 224, 1080),
+        //                 bbox_coordinate_x_scale_map(bboxs[i].x2, 224, 1920), 
+        //                 bbox_coordinate_x_scale_map(bboxs[i].y2, 224, 1080),
         //                 0, 0, 255, 0, 0, 20, false);
-        //     }
+        //         }
         // }
+        // higherhrnet
+        PoseKeyPoints* kps_group = g_pe_result.kps_group;
+        BBox* bboxs = g_pe_result.bboxs;
+        for (int i=0; i<g_pe_result.valid_num; ++i) {
+            draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1920),
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].y1), 288, 1080),
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1920), 
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].y2), 288, 1080),
+                    0, 0, 255, 0, 0, 20, false);
+            for (int j=0; j < 17; ++j) {
+                draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1920),
+                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1), 288, 1080),
+                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1)+2, 384, 1920), 
+                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1)+2, 288, 1080),
+                        0, 0, 255, 0, 0, 20, false);
+            }
+        }
 
         if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
             video->jpeg_out_buf = video->buffer[buf.index];
@@ -1117,12 +1117,12 @@ static void metadata_parser_task(void *arg)
         // print_buf_hex(metadata, frame.data_size);
         // printf("\n\n\n");
 
-        print_buf_hex(metadata, 12);
-        printf("\n");
+        // print_buf_hex(metadata, 12);
+        // printf("\n");
 
         if(parse_ap_params(metadata, frame.data_size)) {
-            detect_postprocess_yolov8n();
-            // pose_estimate_postprocess_higherhrnet();
+            // detect_postprocess_yolov8n();
+            pose_estimate_postprocess_higherhrnet();
             // print_pose_estimation_result();
             // ESP_LOGW(TAG, "Parse Ap Params Failed.");
             // skip

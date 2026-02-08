@@ -69,6 +69,9 @@ bool parse_ap_params(const uint8_t* data, size_t data_len) {
     uint32_t data_offset = 0;
     IMX500OutputHeader header;
     unpack_imx500_output_header(data, &header);
+    if (header.valid_flag != 1) {
+        return false;
+    }
     data_offset += IMX500_HEADER_LEN;
 
     if (header.size_of_ap_parameter == 0) {
@@ -305,7 +308,7 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     auto bboxs = g_pe_result.bboxs;
     g_pe_result.valid_num = 0;
 
-    const float confidence_threshold = 0.35f;
+    const float confidence_threshold = 0.3f;
 
     HigherHRNetOutput higherhrnet_output;
     higherhrnet_output.tag.resize(num_joints, std::vector<float>(max_num_people));
