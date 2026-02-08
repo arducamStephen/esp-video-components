@@ -3416,6 +3416,8 @@ int request_firmware(const struct firmware **fw, const char *name)
 /* Start streaming */
 int imx500_start_streaming(struct imx500 *imx500)
 {
+	// esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0702, 0x00000001);
+	// vTaskDelay(pdMS_TO_TICKS(100));
 	uint32_t boot_mode = 1;  // 1 cam module selfboot | 2 i2c load nn boot
 	esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0701, 34532); 
 	esp_sccb_transmit_reg_a16v32(imx500->sccb_handle, 0x0710, boot_mode); // start imx500 boot

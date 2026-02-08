@@ -40,10 +40,10 @@
 #define SPI_DUMMY_BYTE           0xFF
 #define MAX_DATA_R_BUF_SIZE      2 * 1024 * 1024
 #define SPI_HOST                 SPI2_HOST
-#define PIN_NUM_MOSI             GPIO_NUM_48
-#define PIN_NUM_MISO             GPIO_NUM_53
-#define PIN_NUM_CLK              GPIO_NUM_26
-#define PIN_NUM_CS               GPIO_NUM_47
+#define PIN_NUM_MOSI             GPIO_NUM_3
+#define PIN_NUM_MISO             GPIO_NUM_2
+#define PIN_NUM_CLK              GPIO_NUM_5
+#define PIN_NUM_CS               GPIO_NUM_4
 
 // bus
 static i2c_master_bus_handle_t g_bus_handle;
@@ -467,26 +467,29 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
 
         ESP_GOTO_ON_ERROR(httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY)), fail0, TAG, "failed to send boundary");
         
-        auto bboxs = g_d_result.bboxs;
-        if (g_d_result.valid_num > 0) {
-                // draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-                //     bbox_coordinate_x_scale_map(bboxs[0].x1, 224, 1920),
-                //     bbox_coordinate_x_scale_map(bboxs[0].y1, 224, 1080),
-                //     bbox_coordinate_x_scale_map(bboxs[0].x2, 224, 1920), 
-                //     bbox_coordinate_x_scale_map(bboxs[0].y2, 224, 1080),
-                //     0, 0, 255, 0, 0, 20, false);
-        }
-
-        // for (int i = 0; i < g_d_result.valid_num; ++i) {
-        //     //Draw a rectangle with specified RGB color on a buffer
-        //     draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-        //             bbox_coordinate_x_scale_map(bboxs[i].x1, 224, 1920),
-        //             bbox_coordinate_x_scale_map(bboxs[i].y1, 224, 1080),
-        //             bbox_coordinate_x_scale_map(bboxs[i].x2, 224, 1920), 
-        //             bbox_coordinate_x_scale_map(bboxs[i].y2, 224, 1080),
-        //             0, 0, 255, 0, 0, 20, false);
-        // }
+        PoseKeyPoints* kps_group = g_pe_result.kps_group;
+        BBox* bboxs = g_pe_result.bboxs;
         
+        
+        // draw_large_green_point((uint16_t*)video->buffer[buf.index], (int)(1920/2), (int)(1080/2), false);
+        for (int i=0; i<g_pe_result.valid_num; ++i) {
+            draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1920),
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].y1), 288, 1080),
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1920), 
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].y2), 288, 1080),
+                    0, 0, 255, 0, 0, 20, false);
+            for (int j=0; j < 17; ++j) {
+                draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1920),
+                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1), 288, 1080),
+                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1)+2, 384, 1920), 
+                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1)+2, 288, 1080),
+                        0, 0, 255, 0, 0, 20, false);
+            }
+        }
+        
+
 
         if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
             video->jpeg_out_buf = video->buffer[buf.index];
@@ -875,21 +878,14 @@ void init_spi_dev()
         .max_transfer_sz = 4096,
     };
 
-    spi_device_interface_config_t devcfg = {
-        .clock_speed_hz = 5 * 1000 * 1000,
-        .mode = 3,
-        .spics_io_num = -1,
-        .queue_size = 1,
-    };
-
     ESP_ERROR_CHECK(
         spi_bus_initialize(SPI_HOST, &buscfg, SPI_DMA_CH_AUTO)
     );
 
     spi_device_interface_config_t devcfg = {
         .clock_speed_hz = 5 * 1000 * 1000,
-        .mode = 0,
-        .spics_io_num = -1,
+        .mode = 3,
+        .spics_io_num = PIN_NUM_CS,
         .queue_size = 1,
         .flags = 0,
     };
@@ -903,16 +899,28 @@ void init_spi_dev()
         .mode = GPIO_MODE_OUTPUT,
     };
 
-    gpio_config(&cs_cfg);
-    gpio_set_level(PIN_NUM_CS, 1); // CS idle high
-    // while (1)
-    // {
-    //     gpio_set_level(PIN_NUM_CS, 1); // CS idle high
-    //     gpio_set_level(PIN_NUM_CS, 0); // CS idle high
-    // }
-    
-
 }
+
+// void spi_read_dma(uint8_t *rx_buf, size_t len)
+// {
+//     static uint8_t dummy_tx[4096];
+
+//     if (len > sizeof(dummy_tx)) {
+//         ESP_LOGE("SPI", "len too large");
+//         return;
+//     }
+
+//     memset(dummy_tx, 0x00, len);
+
+//     spi_transaction_t t = {
+//         .length = len * 8,
+//         .tx_buffer = dummy_tx,
+//         .rx_buffer = rx_buf,
+//     };
+
+//     ESP_ERROR_CHECK(spi_device_transmit(g_spi_dev, &t));
+// }
+
 
 void spi_read_dma(uint8_t *rx_buf, size_t len)
 {
@@ -927,12 +935,13 @@ void spi_read_dma(uint8_t *rx_buf, size_t len)
 
     spi_transaction_t t = {
         .length = len * 8,   // bits
+        .rxlength = len * 8,
         .tx_buffer = dummy_tx,
         .rx_buffer = rx_buf,
     };
 
     gpio_set_level(PIN_NUM_CS, 0);          // CS ↓
-    // ESP_ERROR_CHECK(spi_device_transmit(g_spi_dev, &t));
+    ESP_ERROR_CHECK(spi_device_transmit(g_spi_dev, &t));
     gpio_set_level(PIN_NUM_CS, 1);          // CS ↑
 }
 
@@ -1048,10 +1057,21 @@ void spi_read_dma(uint8_t *rx_buf, size_t len)
 
 int read_metadata(uint8_t *r_buf, uint32_t max_len, uint32_t* data_size) {
 
+    static int count = 0;
     i2c_read_reg16_u32(METADATA_SIZE_REG, data_size);
     if (*data_size > max_len) {
         ESP_LOGE(TAG, "Error: data_size > max_data_r_buf_size: %lu > %lu\n", *data_size, max_len);
         return -2;  // data_size > max_data_r_buf_size
+    }
+    uint8_t dummy_read;
+    if (count <= 0) { 
+        // spi_read_dma(&dummy_read, 1);
+        ++count;
+        printf("count: %d\n", count);
+        i2c_write_reg16_u32(CAPTURE_METADATA_REG, 1);
+        vTaskDelay(pdMS_TO_TICKS(3 * 1000));
+        ++count;
+        
     }
     i2c_write_reg16_u32(CAPTURE_METADATA_REG, 1);
     if (!wait_metadata_ready()){
@@ -1087,7 +1107,7 @@ static void metadata_parser_task(void *arg)
         uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
         print_buf_hex(metadata, 12);
         printf("\n");
-        if(!parse_ap_params(metadata, frame.data_size)) {
+        if(parse_ap_params(metadata, frame.data_size)) {
             pose_estimate_postprocess_higherhrnet();
             print_pose_estimation_result();
             // ESP_LOGW(TAG, "Parse Ap Params Failed.");
@@ -1158,28 +1178,29 @@ void app_main(void)
 
     ESP_ERROR_CHECK(example_video_init());
     init_i2c_dev();
-    // init_spi_dev();
+    init_spi_dev();
     gpio_reset_pin(PIN_NUM_CS);
     /* Set the GPIO as a push/pull output */
     gpio_set_direction(PIN_NUM_CS, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_NUM_CS, 1);          // CS ↑
 
-    while (1)
-    {
-        gpio_set_level(PIN_NUM_CS, 1); // CS idle high
-        vTaskDelay(pdMS_TO_TICKS(10));
-        gpio_set_level(PIN_NUM_CS, 0); // CS idle high
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
+    // while (1)
+    // {
+    //     gpio_set_level(PIN_NUM_CS, 1); // CS idle high
+    //     vTaskDelay(pdMS_TO_TICKS(10));
+    //     gpio_set_level(PIN_NUM_CS, 0); // CS idle high
+    //     vTaskDelay(pdMS_TO_TICKS(10));
+    // }
 
-    while (1)
-    {
-       gpio_set_level(PIN_NUM_CS, 1);
-       ESP_LOGI(TAG, "CS UP");
-       vTaskDelay(pdMS_TO_TICKS(10));
-       gpio_set_level(PIN_NUM_CS, 0);
-       ESP_LOGI(TAG, "CS DOWN");
-       vTaskDelay(pdMS_TO_TICKS(10));
-    }
+    // while (1)
+    // {
+    //    gpio_set_level(PIN_NUM_CS, 1);
+    //    ESP_LOGI(TAG, "CS UP");
+    //    vTaskDelay(pdMS_TO_TICKS(10));
+    //    gpio_set_level(PIN_NUM_CS, 0);
+    //    ESP_LOGI(TAG, "CS DOWN");
+    //    vTaskDelay(pdMS_TO_TICKS(10));
+    // }
     
 
     ESP_ERROR_CHECK(esp_netif_init());

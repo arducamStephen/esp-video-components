@@ -11,8 +11,8 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-std::vector<const uint8_t*> s_output_tensor_ptrs;
-const ::flatbuffers::Vector<::flatbuffers::Offset<apParams::fb::FBOutputTensor>>* s_output_tensors_fb;
+static std::vector<const uint8_t*> s_output_tensor_ptrs;
+static const ::flatbuffers::Vector<::flatbuffers::Offset<apParams::fb::FBOutputTensor>>* s_output_tensors_fb;
 DetectionResult g_d_result;
 PoseEstimationResult g_pe_result;
 
@@ -217,19 +217,20 @@ void print_pose_estimation_result(void) {
     printf("==========================================\n");
 }
 
+#define PE_DEBUG 0
 
 bool pose_estimate_postprocess_higherhrnet(void) {
 
     if (!s_output_tensors_fb) {
-        printf("outputTensors is null (schema mismatch or field missing)\n");
+        printf("[PE] outputTensors is null\n");
         return false;
     }
 
     if (s_output_tensors_fb->size() != 3) {
-        printf("OutputTensor num is insufficient: %lu\n", (unsigned long)s_output_tensors_fb->size());
+        printf("[PE] OutputTensor num error: %lu\n",
+               (unsigned long)s_output_tensors_fb->size());
         return false;
     }
-
 
     const auto* raw_tag = s_output_tensors_fb->Get(0);
     const auto* raw_ind = s_output_tensors_fb->Get(1);
@@ -240,46 +241,92 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     const auto* raw_val_data = reinterpret_cast<const int8_t*>(s_output_tensor_ptrs[2]);
 
     auto max_num_people = raw_tag->dimensions()->Get(0)->size();
-    auto num_joints = raw_tag->dimensions()->Get(1)->size();
+    auto num_joints     = raw_tag->dimensions()->Get(1)->size();
+
+    // printf("[PE] max_num_people=%d, num_joints=%d\n",
+    //        max_num_people, num_joints);
+    // printf("[PE] tag scale=%.6f shift=%d\n", raw_tag->scale(), raw_tag->shift());
+    // printf("[PE] val scale=%.6f shift=%d\n", raw_val->scale(), raw_val->shift());
 
     auto kps_group = g_pe_result.kps_group;
     auto bboxs = g_pe_result.bboxs;
     g_pe_result.valid_num = 0;
 
-    const float confidence_threshold = 0.1f;
-    HigherHRNetOutput higherhrnet_output;
-    higherhrnet_output.tag.resize(num_joints, std::vector<float>(max_num_people, 0.f));
-    higherhrnet_output.ind.resize(num_joints, std::vector<int32_t>(max_num_people, 0));
-    higherhrnet_output.val.resize(num_joints, std::vector<float>(max_num_people, 0.f));
+    const float confidence_threshold = 0.35f;
 
-    for (uint32_t i = 0; i < max_num_people; ++i) {
-        higherhrnet_output.tag[i / max_num_people][i % max_num_people] = (static_cast<float>(raw_tag_data[i]) - raw_tag->shift()) * raw_tag->scale();
-        higherhrnet_output.ind[i / max_num_people][i % max_num_people] = static_cast<int>(raw_ind_data[i]);
-        higherhrnet_output.val[i / max_num_people][i % max_num_people] = (static_cast<float>(raw_val_data[i]) - raw_val->shift()) * raw_val->scale();
+    HigherHRNetOutput higherhrnet_output;
+    higherhrnet_output.tag.resize(num_joints, std::vector<float>(max_num_people));
+    higherhrnet_output.ind.resize(num_joints, std::vector<int32_t>(max_num_people));
+    higherhrnet_output.val.resize(num_joints, std::vector<float>(max_num_people));
+
+    /* --------- tensor unpack & dequant --------- */
+    for (uint32_t i = 0; i < max_num_people * num_joints; ++i) {
+        uint32_t j = i / max_num_people;
+        uint32_t p = i % max_num_people;
+
+        higherhrnet_output.tag[j][p] =
+            (raw_tag_data[i] - raw_tag->shift()) * raw_tag->scale();
+        higherhrnet_output.ind[j][p] = raw_ind_data[i];
+        higherhrnet_output.val[j][p] =
+            (raw_val_data[i] - raw_val->shift()) * raw_val->scale();
+
+#if PE_DEBUG
+        if (i < 5) {
+            printf("[PE] raw[%ld] tag=%d val=%d ind=%ld -> tag=%.3f val=%.3f\n",
+                   i,
+                   raw_tag_data[i],
+                   raw_val_data[i],
+                   raw_ind_data[i],
+                   higherhrnet_output.tag[j][p],
+                   higherhrnet_output.val[j][p]);
+        }
+#endif
     }
 
-    // 定义各尺寸（单位均为像素）：  
-    // 原图尺寸
-    std::pair<int, int> img_size = { 288, 384 };        // (height, width)
-    // pad 值（假设左右各 0，顶部、底部均 0）
-    std::pair<int, int> img_w_pad = { 0, 0 };
-    std::pair<int, int> img_h_pad = { 0, 0 };
-    // 网络输入尺寸（例如 288 x 384）与输出特征图尺寸（例如 144 x 192）
-    std::pair<int, int> input_image_size = { 288, 384 };
-    std::pair<int, int> output_shape = { 144, 192 };
+    /* --------- postprocess --------- */
+    std::pair<int, int> img_size = {288, 384};
+    std::pair<int, int> img_w_pad = {0, 0};
+    std::pair<int, int> img_h_pad = {0, 0};
+    std::pair<int, int> input_image_size = {288, 384};
+    std::pair<int, int> output_shape = {144, 192};
+
     auto result_ = postprocess_higherhrnet(
-        higherhrnet_output, 
+        higherhrnet_output,
         img_size, img_w_pad, img_h_pad,
         confidence_threshold, true,
         input_image_size, output_shape);
-    auto keypoints_ = std::get<0>(result_);
-    auto scores_ = std::get<1>(result_);
-    auto boxes_ = std::get<2>(result_);
 
-    uint32_t max_items = std::min({(uint32_t)keypoints_.size(), (uint32_t)MAX_DETECT_ITEM_NUM});
+    auto keypoints_ = std::get<0>(result_);
+    auto scores_    = std::get<1>(result_);
+    auto boxes_     = std::get<2>(result_);
+
+#if PE_DEBUG
+    printf("[PE] postprocess output: persons=%lu\n",
+           (unsigned long)keypoints_.size());
+#endif
+
+    uint32_t max_items =
+        std::min((uint32_t)keypoints_.size(),
+                 (uint32_t)MAX_DETECT_ITEM_NUM);
 
     for (uint32_t i = 0; i < max_items; ++i) {
+
+    printf("[PE] person %ld score=%.3f box=[%.1f %.1f %.1f %.1f]\n",
+               i,
+               scores_[i],
+               boxes_[i][0], boxes_[i][1],
+               boxes_[i][2], boxes_[i][3]);
+
+#if PE_DEBUG
+        printf("[PE] person %ld score=%.3f box=[%.1f %.1f %.1f %.1f]\n",
+               i,
+               scores_[i],
+               boxes_[i][0], boxes_[i][1],
+               boxes_[i][2], boxes_[i][3]);
+#endif
+
         if (scores_[i] < confidence_threshold) continue;
+
         bboxs[i].class_id = 0;
         bboxs[i].score = scores_[i];
         bboxs[i].x1 = MIN(MAX(0, boxes_[i][0]), 384);
@@ -287,36 +334,29 @@ bool pose_estimate_postprocess_higherhrnet(void) {
         bboxs[i].x2 = MIN(MAX(0, boxes_[i][2]), 384);
         bboxs[i].y2 = MIN(MAX(0, boxes_[i][3]), 288);
 
-        for(int j = 0; j < num_joints; ++i) {
-            kps_group[i].data[j].x1 = keypoints_[i][0];
-            kps_group[i].data[j].y1 = keypoints_[i][1];
-            kps_group[i].data[j].score = keypoints_[i][2];
+        for (int j = 0; j < num_joints; ++j) {
+            kps_group[i].data[j].x1 = keypoints_[i][j * 3 + 0];
+            kps_group[i].data[j].y1 = keypoints_[i][j * 3 + 1];
+            kps_group[i].data[j].score = keypoints_[i][j * 3 + 2];
+
+#if PE_DEBUG
+            if (j < 2) {
+                printf("    kp[%d] x=%.1f y=%.1f s=%.2f\n",
+                       j,
+                       kps_group[i].data[j].x1,
+                       kps_group[i].data[j].y1,
+                       kps_group[i].data[j].score);
+            }
+#endif
         }
-        
-        g_pe_result.valid_num += 1;
+
+        g_pe_result.valid_num++;
     }
-    //     float confidence = (static_cast<float>(score_data[i]) - score_tensor->shift()) * score_tensor->scale();
-    //     if (confidence < confidence_threshold) continue;
 
-    //     float xmin = (static_cast<float>(bbox_data[i]) - bbox_tensor->shift()) * bbox_tensor->scale();
-    //     float ymin = (static_cast<float>(bbox_data[i + bbox_stride]) - bbox_tensor->shift()) * bbox_tensor->scale();
-    //     float xmax = (static_cast<float>(bbox_data[i + bbox_stride * 2]) - bbox_tensor->shift()) * bbox_tensor->scale();
-    //     float ymax = (static_cast<float>(bbox_data[i + bbox_stride * 3]) - bbox_tensor->shift()) * bbox_tensor->scale();
-    //     uint32_t class_id = (uint32_t)((static_cast<float>(class_data[i]) - class_tensor->shift()) * class_tensor->scale());
+#if PE_DEBUG
+    printf("[PE] valid_num=%d\n", g_pe_result.valid_num);
+#endif
 
-    //     bboxs->class_id = class_id;
-    //     bboxs->score = confidence;
-    //     bboxs->x1 = xmin;
-    //     bboxs->y1 = ymin;
-    //     bboxs->x2 = xmax;
-    //     bboxs->y2 = ymax;
-
-    //     printf("box[%lu]: xmin=%0.2f ymin=%0.2f xmax=%0.2f ymax=%0.2f cls_id=%lu score=%0.3f\n",
-    //            (unsigned long)i, xmin, ymin, xmax, ymax, (unsigned long)class_id, confidence);
-
-    //     bboxs++;
-    //     detection_result->valid_num++;
-    // }
     return true;
 }
 

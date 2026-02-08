@@ -83,7 +83,7 @@ void draw_rectangle_rgb(uint16_t *buffer, int width, int height, int x1, int y1,
  * @param y Y coordinate of the point
  * @param swap_rgb565 Whether to swap the byte order of RGB565 values
  */
-static void draw_large_green_point(uint16_t *buffer, int x, int y, bool swap_rgb565) {
+void draw_large_green_point(uint16_t *buffer, int x, int y, bool swap_rgb565) {
     uint16_t green = 0x07E0;  // RGB565 value for green
     green = maybe_swap_rgb565(green, swap_rgb565);
     

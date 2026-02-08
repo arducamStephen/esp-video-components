@@ -43,6 +43,8 @@ void set_screen_dimensions(int width, int height);
 void draw_rectangle_rgb(uint16_t *buffer, int width, int height, int x1, int y1, int x2, int y2, 
                         int x_offset, int y_offset, uint8_t r, uint8_t g, uint8_t b, int thickness, bool swap_rgb565);
 
+void draw_large_green_point(uint16_t *buffer, int x, int y, bool swap_rgb565);
+
 /**
  * @brief Draw green points at specified landmarks
  * 
