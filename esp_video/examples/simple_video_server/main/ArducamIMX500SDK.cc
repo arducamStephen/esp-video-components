@@ -307,10 +307,6 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     printf("[PE] val scale=%.6f shift=%d\n", raw_val->scale(), raw_val->shift());
 #endif
 
-    auto kps_group = g_pe_result.kps_group;
-    auto bboxs = g_pe_result.bboxs;
-    g_pe_result.valid_num = 0;
-
     const float confidence_threshold = 0.3f;
 
     HigherHRNetOutput higherhrnet_output;
@@ -367,6 +363,10 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     uint32_t max_items =
         std::min((uint32_t)keypoints_.size(),
                  (uint32_t)MAX_DETECT_ITEM_NUM);
+
+    auto kps_group = g_pe_result.kps_group;
+    auto bboxs = g_pe_result.bboxs;
+    g_pe_result.valid_num = 0;
 
     for (uint32_t i = 0; i < max_items; ++i) {
 

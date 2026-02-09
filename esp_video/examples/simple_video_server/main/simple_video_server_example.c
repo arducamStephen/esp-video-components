@@ -28,15 +28,12 @@
 #include "lwip/inet.h"
 #include "lwip/apps/netbiosns.h"
 #include "example_video_common.h"
-<<<<<<< HEAD
 #include "esp_rom_sys.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "ArducamIMX500SDK.h"
 #include "driver/ppa.h"
-=======
 #include "esp_painter.h"
->>>>>>> origin/add_arducam_pivariety
 #include "app_drawing_utils.h"
 
 
@@ -55,6 +52,19 @@
 #define PIN_NUM_MISO             GPIO_NUM_53
 #define PIN_NUM_CLK              GPIO_NUM_26
 #define PIN_NUM_CS               GPIO_NUM_47
+
+
+// typedef struct {
+//     uint8_t a;
+//     uint8_t b;
+// } skeleton_pair_t;
+
+// static const skeleton_pair_t skeleton[] = {
+//     {0, 1}, {0, 2}, {1, 3}, {2, 4},       
+//     {5, 6}, {5, 11}, {11, 12}, {12, 6},   
+//     {5, 7}, {7, 9}, {6, 8}, {8, 10},      
+//     {11, 13}, {13, 15}, {12, 14}, {14, 16}
+// };
 
 // bus
 static i2c_master_bus_handle_t g_bus_handle;
@@ -487,7 +497,6 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
 
         ESP_GOTO_ON_ERROR(httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY)), fail0, TAG, "failed to send boundary");
         
-<<<<<<< HEAD
         // yolov8n
         // BBox* bboxs = g_d_result.bboxs;
         // if (g_d_result.valid_num > 0) {
@@ -504,36 +513,48 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
         PoseKeyPoints* kps_group = g_pe_result.kps_group;
         BBox* bboxs = g_pe_result.bboxs;
         for (int i=0; i<g_pe_result.valid_num; ++i) {
-            draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-                    bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1920),
-                    bbox_coordinate_x_scale_map((int)(bboxs[i].y1), 288, 1080),
-                    bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1920), 
-                    bbox_coordinate_x_scale_map((int)(bboxs[i].y2), 288, 1080),
-                    0, 0, 255, 0, 0, 20, false);
-            for (int j=0; j < 17; ++j) {
-                draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1920),
-                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1), 288, 1080),
-                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1)+2, 384, 1920), 
-                        bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1)+2, 288, 1080),
-                        0, 0, 255, 0, 0, 20, false);
-            }
+            uint32_t x1_ = bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1920);
+            uint32_t y1_ = bbox_coordinate_x_scale_map((int)(bboxs[i].y1), 288, 1080);
+            uint32_t x2_ = bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1920);
+            uint32_t y2_ = bbox_coordinate_x_scale_map((int)(bboxs[i].y2), 288, 1080);
+            esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, x1_, y1_, x1_, y2_, ESP_PAINTER_COLOR_RED, 30);
+            esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, x1_, y1_, x2_, y1_, ESP_PAINTER_COLOR_RED, 30);
+            esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, x2_, y2_, x1_, y2_, ESP_PAINTER_COLOR_RED, 30);
+            esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, x2_, y2_, x2_, y1_, ESP_PAINTER_COLOR_RED, 30);
+            // uint32_t k_x[17];
+            // uint32_t k_y[17];
+            // for (int j=0; j < 17; ++j) {
+            //     k_x[j] = bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1920);
+            //     k_y[j] = bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1), 288, 1080);
+            //     esp_painter_draw_point(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, k_x[j], k_y[j], ESP_PAINTER_COLOR_RED, 10);
+            // }
+
+            // for (int s = 0; s < (sizeof(skeleton) / sizeof(skeleton[0])); ++s) {
+            //     uint8_t p1 = skeleton[s].a;
+            //     uint8_t p2 = skeleton[s].b;
+
+            //     if (k_x[p1] == 0 || k_y[p1] == 0 ||
+            //         k_x[p2] == 0 || k_y[p2] == 0) {
+            //         continue;
+            //     }
+
+            //     esp_painter_draw_line(
+            //         painter_handle,
+            //         (uint8_t *)video->buffer[buf.index],
+            //         video->buffer_size,
+            //         k_x[p1], k_y[p1],
+            //         k_x[p2], k_y[p2],
+            //         ESP_PAINTER_COLOR_RED,
+            //         30
+            //     );
+            // }
         }
-=======
         // Draw a string with specified RGB color on a buffer
-        esp_painter_draw_string(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 100, 100, &esp_painter_basic_font_24, ESP_PAINTER_COLOR_RED, "Hello World");
-        
+        // esp_painter_draw_string(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 100, 100, &esp_painter_basic_font_24, ESP_PAINTER_COLOR_RED, "Hello World");
         // Draw a line with specified RGB color on a buffer
-        esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 100, 100, 200, 200, ESP_PAINTER_COLOR_RED, 30);
-
+        // esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 100, 100, 200, 200, ESP_PAINTER_COLOR_RED, 30);
         // Draw a point with specified RGB color on a buffer
-        esp_painter_draw_point(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 400, 400, ESP_PAINTER_COLOR_RED, 10);
-
-        // //Draw a rectangle with specified RGB color on a buffer
-        // draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-        //         100, 100, 500, 500,
-        //         0, 255, 255, 0, 0, 20, false);
->>>>>>> origin/add_arducam_pivariety
+        // esp_painter_draw_point(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 400, 400, ESP_PAINTER_COLOR_RED, 10);
 
         if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
             video->jpeg_out_buf = video->buffer[buf.index];
