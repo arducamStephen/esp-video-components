@@ -1,7 +1,6 @@
 #ifndef ARDUCAM_IMX500_SDK_H_
 #define ARDUCAM_IMX500_SDK_H_
 
-#define VALID_DATA_OFFSET           0
 #define IMX500_HEADER_LEN           12
 
 #define METADATA_SIZE_REG           0x0701

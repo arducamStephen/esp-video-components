@@ -40,10 +40,17 @@
 #define SPI_DUMMY_BYTE           0xFF
 #define MAX_DATA_R_BUF_SIZE      2 * 1024 * 1024
 #define SPI_HOST                 SPI2_HOST
-#define PIN_NUM_MOSI             GPIO_NUM_3
-#define PIN_NUM_MISO             GPIO_NUM_2
-#define PIN_NUM_CLK              GPIO_NUM_5
-#define PIN_NUM_CS               GPIO_NUM_4
+// #define VALID_DATA_OFFSET           0
+// #define PIN_NUM_MOSI             GPIO_NUM_3
+// #define PIN_NUM_MISO             GPIO_NUM_2
+// #define PIN_NUM_CLK              GPIO_NUM_5
+// #define PIN_NUM_CS               GPIO_NUM_4
+
+#define VALID_DATA_OFFSET           1
+#define PIN_NUM_MOSI             GPIO_NUM_48
+#define PIN_NUM_MISO             GPIO_NUM_53
+#define PIN_NUM_CLK              GPIO_NUM_26
+#define PIN_NUM_CS               GPIO_NUM_47
 
 // bus
 static i2c_master_bus_handle_t g_bus_handle;
