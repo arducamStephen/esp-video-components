@@ -28,11 +28,15 @@
 #include "lwip/inet.h"
 #include "lwip/apps/netbiosns.h"
 #include "example_video_common.h"
+<<<<<<< HEAD
 #include "esp_rom_sys.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "ArducamIMX500SDK.h"
 #include "driver/ppa.h"
+=======
+#include "esp_painter.h"
+>>>>>>> origin/add_arducam_pivariety
 #include "app_drawing_utils.h"
 
 
@@ -443,6 +447,17 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
     char http_string[128];
     bool locked = false;
     web_cam_video_t *video = (web_cam_video_t *)req->user_ctx;
+    esp_painter_handle_t painter_handle;
+    esp_painter_config_t painter_config = {
+        .canvas = {
+            .width = video->width,
+            .height = video->height,
+        },
+        .color_format = ESP_PAINTER_COLOR_FORMAT_RGB565,
+        .default_font = &esp_painter_basic_font_24,
+        .swap_rgb565 = false,
+    };
+    esp_painter_init(&painter_config, &painter_handle);
 
     ESP_RETURN_ON_FALSE(snprintf(http_string, sizeof(http_string), "%" PRIu32, video->frame_rate) > 0,
                         ESP_FAIL, TAG, "failed to format framerate buffer");
@@ -465,8 +480,6 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
         ESP_RETURN_ON_ERROR(ioctl(video->fd, VIDIOC_DQBUF, &buf), TAG, "failed to receive video frame");
         // ESP_LOGW(TAG, "DQ OK");
 
-        
-
         if (!(buf.flags & V4L2_BUF_FLAG_DONE)) {
             ESP_RETURN_ON_ERROR(ioctl(video->fd, VIDIOC_QBUF, &buf), TAG, "failed to queue video frame");
             continue;
@@ -474,6 +487,7 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
 
         ESP_GOTO_ON_ERROR(httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY)), fail0, TAG, "failed to send boundary");
         
+<<<<<<< HEAD
         // yolov8n
         // BBox* bboxs = g_d_result.bboxs;
         // if (g_d_result.valid_num > 0) {
@@ -505,6 +519,21 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
                         0, 0, 255, 0, 0, 20, false);
             }
         }
+=======
+        // Draw a string with specified RGB color on a buffer
+        esp_painter_draw_string(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 100, 100, &esp_painter_basic_font_24, ESP_PAINTER_COLOR_RED, "Hello World");
+        
+        // Draw a line with specified RGB color on a buffer
+        esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 100, 100, 200, 200, ESP_PAINTER_COLOR_RED, 30);
+
+        // Draw a point with specified RGB color on a buffer
+        esp_painter_draw_point(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 400, 400, ESP_PAINTER_COLOR_RED, 10);
+
+        // //Draw a rectangle with specified RGB color on a buffer
+        // draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+        //         100, 100, 500, 500,
+        //         0, 255, 255, 0, 0, 20, false);
+>>>>>>> origin/add_arducam_pivariety
 
         if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
             video->jpeg_out_buf = video->buffer[buf.index];
