@@ -1097,6 +1097,7 @@ static void metadata_reader_task(void *arg)
     while (true) {
         ret = read_metadata(metadata_buf, MAX_DATA_R_BUF_SIZE, &frame.data_size);
         if (metadata_queue && ret == 0) {
+            ESP_LOGI(TAG, "Read metadata len: %ld", frame.data_size);
             xQueueSend(metadata_queue, &frame, portMAX_DELAY);
         }
     }

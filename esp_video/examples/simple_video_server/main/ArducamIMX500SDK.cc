@@ -299,10 +299,13 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     auto max_num_people = raw_tag->dimensions()->Get(0)->size();
     auto num_joints     = raw_tag->dimensions()->Get(1)->size();
 
-    // printf("[PE] max_num_people=%d, num_joints=%d\n",
-    //        max_num_people, num_joints);
-    // printf("[PE] tag scale=%.6f shift=%d\n", raw_tag->scale(), raw_tag->shift());
-    // printf("[PE] val scale=%.6f shift=%d\n", raw_val->scale(), raw_val->shift());
+    
+#if PE_DEBUG
+    printf("[PE] max_num_people=%d, num_joints=%d\n",
+           max_num_people, num_joints);
+    printf("[PE] tag scale=%.6f shift=%d\n", raw_tag->scale(), raw_tag->shift());
+    printf("[PE] val scale=%.6f shift=%d\n", raw_val->scale(), raw_val->shift());
+#endif
 
     auto kps_group = g_pe_result.kps_group;
     auto bboxs = g_pe_result.bboxs;
@@ -366,12 +369,6 @@ bool pose_estimate_postprocess_higherhrnet(void) {
                  (uint32_t)MAX_DETECT_ITEM_NUM);
 
     for (uint32_t i = 0; i < max_items; ++i) {
-
-    printf("[PE] person %ld score=%.3f box=[%.1f %.1f %.1f %.1f]\n",
-               i,
-               scores_[i],
-               boxes_[i][0], boxes_[i][1],
-               boxes_[i][2], boxes_[i][3]);
 
 #if PE_DEBUG
         printf("[PE] person %ld score=%.3f box=[%.1f %.1f %.1f %.1f]\n",
