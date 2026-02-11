@@ -5,6 +5,8 @@
  */
 
 #include "app_drawing_utils.h"
+#include "stdlib.h"
+#include "math.h"
 
 // Default screen dimensions (can be updated at runtime)
 static int g_screen_width = 240;
@@ -75,38 +77,94 @@ void draw_rectangle_rgb(uint16_t *buffer, int width, int height, int x1, int y1,
     }
 }
 
-/**
- * @brief Draw a large green point at specified coordinates
- * 
- * @param buffer Pointer to RGB565 buffer
- * @param x X coordinate of the point
- * @param y Y coordinate of the point
- * @param swap_rgb565 Whether to swap the byte order of RGB565 values
- */
-void draw_large_green_point(uint16_t *buffer, int x, int y, bool swap_rgb565) {
-    uint16_t green = 0x07E0;  // RGB565 value for green
-    green = maybe_swap_rgb565(green, swap_rgb565);
-    
-    // Draw a circle-like point with radius 6
-    for (int dx = -3; dx <= 3; ++dx) {
-        for (int dy = -3; dy <= 3; ++dy) {
-            int nx = x + dx;
-            int ny = y + dy;
+void draw_point_rgb(uint16_t *buffer,
+                    int width, int height,
+                    int x, int y,
+                    int x_offset, int y_offset,
+                    uint8_t r, uint8_t g, uint8_t b,
+                    int thickness,
+                    bool swap_rgb565)
+{
+    // Apply offset
+    x += x_offset;
+    y += y_offset;
 
-            if (nx >= 0 && nx < g_screen_width && ny >= 0 && ny < g_screen_height) {
-                buffer[ny * g_screen_width + nx] = green;
+    // Convert RGB888 to RGB565
+    uint16_t color = ((r & 0xF8) << 8) |
+                     ((g & 0xFC) << 3) |
+                     (b >> 3);
+    color = maybe_swap_rgb565(color, swap_rgb565);
+
+    int half = thickness / 2;
+
+    for (int dy = -half; dy <= half; ++dy) {
+        for (int dx = -half; dx <= half; ++dx) {
+            int px = x + dx;
+            int py = y + dy;
+
+            if (px >= 0 && px < width &&
+                py >= 0 && py < height) {
+                buffer[py * width + px] = color;
             }
         }
     }
 }
 
-// void draw_green_points(uint16_t *buffer, const std::vector<int> &landmarks, bool swap_rgb565) 
-// {
-//     // Draw 5 landmark points (usually representing facial landmarks)
-//     for (int i = 0; i < 5; i++) {
-//         int x = landmarks[2 * i];     
-//         int y = landmarks[2 * i + 1]; 
+void draw_line_rgb(uint16_t *buffer,
+                   int width, int height,
+                   int x1, int y1,
+                   int x2, int y2,
+                   int x_offset, int y_offset,
+                   uint8_t r, uint8_t g, uint8_t b,
+                   int thickness,
+                   bool swap_rgb565)
+{
+    // Apply offset
+    x1 += x_offset;
+    y1 += y_offset;
+    x2 += x_offset;
+    y2 += y_offset;
 
-//         draw_large_green_point(buffer, x, y, swap_rgb565);
-//     }
-// } 
+    // Convert RGB888 to RGB565
+    uint16_t color = ((r & 0xF8) << 8) |
+                     ((g & 0xFC) << 3) |
+                     (b >> 3);
+    color = maybe_swap_rgb565(color, swap_rgb565);
+
+    int dx = abs(x2 - x1);
+    int dy = abs(y2 - y1);
+    int sx = (x1 < x2) ? 1 : -1;
+    int sy = (y1 < y2) ? 1 : -1;
+    int err = dx - dy;
+
+    int half = thickness / 2;
+
+    while (1) {
+        // Draw thickness as a small square around the point
+        for (int ty = -half; ty <= half; ++ty) {
+            for (int tx = -half; tx <= half; ++tx) {
+                int px = x1 + tx;
+                int py = y1 + ty;
+
+                if (px >= 0 && px < width &&
+                    py >= 0 && py < height) {
+                    buffer[py * width + px] = color;
+                }
+            }
+        }
+
+        if (x1 == x2 && y1 == y2)
+            break;
+
+        int e2 = err << 1;
+        if (e2 > -dy) {
+            err -= dy;
+            x1 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y1 += sy;
+        }
+    }
+}
+

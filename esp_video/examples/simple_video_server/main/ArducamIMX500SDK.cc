@@ -5,6 +5,9 @@
 #include "string.h"
 #include <algorithm>
 #include "munkres.hpp"
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 
 #define ALIGN_DOWN(size, align) ((size) & ~((align) - 1))
 #define ALIGN_UP(size, align)   (ALIGN_DOWN((size) + (align) - 1, (align)))
@@ -15,6 +18,119 @@ static std::vector<const uint8_t*> s_output_tensor_ptrs;
 static const ::flatbuffers::Vector<::flatbuffers::Offset<apParams::fb::FBOutputTensor>>* s_output_tensors_fb;
 DetectionResult g_d_result;
 PoseEstimationResult g_pe_result;
+
+static float bbox_area(const std::vector<float>& box)
+{
+    float w = std::max(0.0f, box[2] - box[0]);
+    float h = std::max(0.0f, box[3] - box[1]);
+    return w * h;
+}
+
+static float bbox_iou(const std::vector<float>& a, const std::vector<float>& b)
+{
+    float ix1 = std::max(a[0], b[0]);
+    float iy1 = std::max(a[1], b[1]);
+    float ix2 = std::min(a[2], b[2]);
+    float iy2 = std::min(a[3], b[3]);
+
+    float iw = std::max(0.0f, ix2 - ix1);
+    float ih = std::max(0.0f, iy2 - iy1);
+    float inter = iw * ih;
+    float uni = bbox_area(a) + bbox_area(b) - inter;
+    if (uni <= 0.0f) {
+        return 0.0f;
+    }
+    return inter / uni;
+}
+
+static void suppress_duplicate_pose_results(std::vector<std::vector<float>>& keypoints,
+                                            std::vector<float>& scores,
+                                            std::vector<std::vector<float>>& boxes,
+                                            float iou_threshold)
+{
+    if (scores.empty() || boxes.size() != scores.size() || keypoints.size() != scores.size()) {
+        return;
+    }
+
+    std::vector<size_t> order(scores.size());
+    for (size_t i = 0; i < order.size(); ++i) {
+        order[i] = i;
+    }
+    std::sort(order.begin(), order.end(), [&](size_t lhs, size_t rhs) {
+        return scores[lhs] > scores[rhs];
+    });
+
+    std::vector<bool> suppressed(order.size(), false);
+    std::vector<std::vector<float>> kept_kps;
+    std::vector<float> kept_scores;
+    std::vector<std::vector<float>> kept_boxes;
+
+    for (size_t oi = 0; oi < order.size(); ++oi) {
+        if (suppressed[oi]) {
+            continue;
+        }
+
+        size_t idx = order[oi];
+        kept_kps.push_back(keypoints[idx]);
+        kept_scores.push_back(scores[idx]);
+        kept_boxes.push_back(boxes[idx]);
+
+        for (size_t oj = oi + 1; oj < order.size(); ++oj) {
+            if (suppressed[oj]) {
+                continue;
+            }
+            size_t jdx = order[oj];
+            if (bbox_iou(boxes[idx], boxes[jdx]) >= iou_threshold) {
+                suppressed[oj] = true;
+            }
+        }
+    }
+
+    keypoints.swap(kept_kps);
+    scores.swap(kept_scores);
+    boxes.swap(kept_boxes);
+}
+
+static uint32_t count_valid_joints(const std::vector<float>& keypoints_flat,
+                                   float joint_score_threshold)
+{
+    uint32_t valid = 0;
+    for (size_t j = 0; j + 2 < keypoints_flat.size(); j += 3) {
+        if (keypoints_flat[j + 2] >= joint_score_threshold) {
+            ++valid;
+        }
+    }
+    return valid;
+}
+
+static void filter_pose_results_by_joint_quality(std::vector<std::vector<float>>& keypoints,
+                                                 std::vector<float>& scores,
+                                                 std::vector<std::vector<float>>& boxes,
+                                                 uint32_t min_valid_joints,
+                                                 float joint_score_threshold)
+{
+    if (scores.empty() || boxes.size() != scores.size() || keypoints.size() != scores.size()) {
+        return;
+    }
+
+    std::vector<std::vector<float>> kept_kps;
+    std::vector<float> kept_scores;
+    std::vector<std::vector<float>> kept_boxes;
+
+    for (size_t i = 0; i < scores.size(); ++i) {
+        uint32_t valid_joints = count_valid_joints(keypoints[i], joint_score_threshold);
+        if (valid_joints < min_valid_joints) {
+            continue;
+        }
+        kept_kps.push_back(keypoints[i]);
+        kept_scores.push_back(scores[i]);
+        kept_boxes.push_back(boxes[i]);
+    }
+
+    keypoints.swap(kept_kps);
+    scores.swap(kept_scores);
+    boxes.swap(kept_boxes);
+}
 
 int32_t print_buf_hex(const uint8_t* buf, uint32_t len) {
     uint32_t i;
@@ -307,6 +423,9 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     printf("[PE] val scale=%.6f shift=%d\n", raw_val->scale(), raw_val->shift());
 #endif
 
+    auto kps_group = g_pe_result.kps_group;
+    auto bboxs = g_pe_result.bboxs;
+
     const float confidence_threshold = 0.3f;
 
     HigherHRNetOutput higherhrnet_output;
@@ -355,6 +474,11 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     auto scores_    = std::get<1>(result_);
     auto boxes_     = std::get<2>(result_);
 
+    // 丢弃仅含少量低置信度关键点的人体候选，减少“同一目标多检测 + 单帧骨架不完整”抖动
+    filter_pose_results_by_joint_quality(keypoints_, scores_, boxes_, 6, 0.20f);
+    // 对剩余候选执行更积极的 IoU 去重，保留高分结果
+    suppress_duplicate_pose_results(keypoints_, scores_, boxes_, 0.50f);
+
 #if PE_DEBUG
     printf("[PE] postprocess output: persons=%lu\n",
            (unsigned long)keypoints_.size());
@@ -363,10 +487,6 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     uint32_t max_items =
         std::min((uint32_t)keypoints_.size(),
                  (uint32_t)MAX_DETECT_ITEM_NUM);
-
-    auto kps_group = g_pe_result.kps_group;
-    auto bboxs = g_pe_result.bboxs;
-    g_pe_result.valid_num = 0;
 
     for (uint32_t i = 0; i < max_items; ++i) {
 
@@ -427,5 +547,14 @@ uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h) {
     return y_;
 }
 
+bool test_spi_bus_by_sim_data(const uint8_t* data, size_t data_len) {
+    for (int i = 0; i < data_len; ++i) {
+        if (data[i] != 0x55){
+            printf("Error data[%d]: 0x%x\n", i, data[i]);
+            return false;
+        }   
+    }
+    return true;
+}
 
 }

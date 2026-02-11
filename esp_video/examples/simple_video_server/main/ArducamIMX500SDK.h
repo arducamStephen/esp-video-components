@@ -78,6 +78,7 @@ bool detect_postprocess_yolov8n(void);
 int32_t print_buf_hex(const uint8_t* buf, uint32_t len);
 uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w);
 uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
+bool test_spi_bus_by_sim_data(const uint8_t* data, size_t data_len);
 
 #ifdef __cplusplus
 }

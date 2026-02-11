@@ -43,16 +43,23 @@ void set_screen_dimensions(int width, int height);
 void draw_rectangle_rgb(uint16_t *buffer, int width, int height, int x1, int y1, int x2, int y2, 
                         int x_offset, int y_offset, uint8_t r, uint8_t g, uint8_t b, int thickness, bool swap_rgb565);
 
-void draw_large_green_point(uint16_t *buffer, int x, int y, bool swap_rgb565);
+void draw_point_rgb(uint16_t *buffer,
+                    int width, int height,
+                    int x, int y,
+                    int x_offset, int y_offset,
+                    uint8_t r, uint8_t g, uint8_t b,
+                    int thickness,
+                    bool swap_rgb565);
 
-/**
- * @brief Draw green points at specified landmarks
- * 
- * @param buffer      Pointer to RGB565 buffer
- * @param landmarks   Vector of landmark coordinates (x1, y1, x2, y2, ..., x5, y5)
- * @param swap_rgb565 Whether to swap the byte order of RGB565 values
- */
-// void draw_green_points(uint16_t *buffer, const std::vector<int> &landmarks, bool swap_rgb565 = false);
+void draw_line_rgb(uint16_t *buffer,
+                   int width, int height,
+                   int x1, int y1,
+                   int x2, int y2,
+                   int x_offset, int y_offset,
+                   uint8_t r, uint8_t g, uint8_t b,
+                   int thickness,
+                   bool swap_rgb565);
+
 
 #ifdef __cplusplus
 }

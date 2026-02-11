@@ -33,13 +33,14 @@
 #include "driver/gpio.h"
 #include "ArducamIMX500SDK.h"
 #include "driver/ppa.h"
-#include "esp_painter.h"
 #include "app_drawing_utils.h"
 
 
+#define METADATA_PINGPONG_NUM 2
+#define PE_RESULT_PINGPONG_NUM  2
 #define SPI_MAX_DMA_BYTES        4096
 #define SPI_DUMMY_BYTE           0xFF
-#define MAX_DATA_R_BUF_SIZE      2 * 1024 * 1024
+#define MAX_DATA_R_BUF_SIZE      1 * 1024 * 1024
 #define SPI_HOST                 SPI2_HOST
 // #define VALID_DATA_OFFSET           0
 // #define PIN_NUM_MOSI             GPIO_NUM_3
@@ -47,24 +48,31 @@
 // #define PIN_NUM_CLK              GPIO_NUM_5
 // #define PIN_NUM_CS               GPIO_NUM_4
 
-#define VALID_DATA_OFFSET           1
+#define VALID_DATA_OFFSET           0
 #define PIN_NUM_MOSI             GPIO_NUM_48
 #define PIN_NUM_MISO             GPIO_NUM_53
 #define PIN_NUM_CLK              GPIO_NUM_26
 #define PIN_NUM_CS               GPIO_NUM_47
 
 
-// typedef struct {
-//     uint8_t a;
-//     uint8_t b;
-// } skeleton_pair_t;
+static uint8_t *metadata_buf_pool[METADATA_PINGPONG_NUM];
+static bool    metadata_buf_busy[METADATA_PINGPONG_NUM] = { false, false };
+static PoseEstimationResult *pe_result_pool[PE_RESULT_PINGPONG_NUM];
+static bool pe_result_busy[PE_RESULT_PINGPONG_NUM] = { false, false };
 
-// static const skeleton_pair_t skeleton[] = {
-//     {0, 1}, {0, 2}, {1, 3}, {2, 4},       
-//     {5, 6}, {5, 11}, {11, 12}, {12, 6},   
-//     {5, 7}, {7, 9}, {6, 8}, {8, 10},      
-//     {11, 13}, {13, 15}, {12, 14}, {14, 16}
-// };
+static QueueHandle_t metadata_queue;
+
+typedef struct {
+    uint8_t a;
+    uint8_t b;
+} skeleton_pair_t;
+
+static const skeleton_pair_t skeleton[] = {
+    {0, 1}, {0, 2}, {1, 3}, {2, 4},       
+    {5, 6}, {5, 11}, {11, 12}, {12, 6},   
+    {5, 7}, {7, 9}, {6, 8}, {8, 10},      
+    {11, 13}, {13, 15}, {12, 14}, {14, 16}
+};
 
 // bus
 static i2c_master_bus_handle_t g_bus_handle;
@@ -141,12 +149,82 @@ typedef struct request_desc {
 } request_desc_t;
 
 static const char *TAG = "app";
-static QueueHandle_t metadata_queue;
-static uint8_t *metadata_buf;
 
 typedef struct metadata_frame {
+    uint8_t* data;
     uint32_t data_size;
+    uint8_t  index;
 } metadata_frame_t;
+
+void init_metadata_buf_pool(void) {
+    for (int i = 0; i < METADATA_PINGPONG_NUM; i++) {
+    metadata_buf_pool[i] = heap_caps_malloc(
+        MAX_DATA_R_BUF_SIZE,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+    );
+    assert(metadata_buf_pool[i]);
+    }
+}
+
+void init_pe_result_pool(void)
+{
+    for (int i = 0; i < PE_RESULT_PINGPONG_NUM; i++) {
+
+        pe_result_pool[i] = heap_caps_malloc(
+            sizeof(PoseEstimationResult),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
+        );
+        assert(pe_result_pool[i]);
+        memset(pe_result_pool[i], 0, sizeof(PoseEstimationResult));
+    }
+}
+
+static void submit_pe_result_from_global(void)
+{
+    for (int i = 0; i < PE_RESULT_PINGPONG_NUM; i++) {
+        if (!pe_result_busy[i]) {
+
+            memcpy(pe_result_pool[i],
+                   &g_pe_result,
+                   sizeof(PoseEstimationResult));
+
+            pe_result_busy[i] = true;
+
+            ESP_LOGD(TAG,
+                     "PE result written to slot %d",
+                     i);
+            return;
+        }
+    }
+
+    ESP_LOGW(TAG,
+             "No free PE result slot, drop result");
+}
+
+bool get_pe_result_copy(PoseEstimationResult *out)
+{
+    if (!out) {
+        return false;
+    }
+
+    for (int i = 0; i < PE_RESULT_PINGPONG_NUM; i++) {
+        if (pe_result_busy[i]) {
+
+            memcpy(out,
+                   pe_result_pool[i],
+                   sizeof(PoseEstimationResult));
+
+            pe_result_busy[i] = false;
+
+            ESP_LOGD(TAG,
+                     "PE result slot %d consumed",
+                     i);
+            return true;
+        }
+    }
+
+    return false;
+}
 
 static bool is_valid_web_cam(web_cam_video_t *video)
 {
@@ -457,17 +535,6 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
     char http_string[128];
     bool locked = false;
     web_cam_video_t *video = (web_cam_video_t *)req->user_ctx;
-    esp_painter_handle_t painter_handle;
-    esp_painter_config_t painter_config = {
-        .canvas = {
-            .width = video->width,
-            .height = video->height,
-        },
-        .color_format = ESP_PAINTER_COLOR_FORMAT_RGB565,
-        .default_font = &esp_painter_basic_font_24,
-        .swap_rgb565 = false,
-    };
-    esp_painter_init(&painter_config, &painter_handle);
 
     ESP_RETURN_ON_FALSE(snprintf(http_string, sizeof(http_string), "%" PRIu32, video->frame_rate) > 0,
                         ESP_FAIL, TAG, "failed to format framerate buffer");
@@ -475,6 +542,9 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
     ESP_RETURN_ON_ERROR(httpd_resp_set_type(req, STREAM_CONTENT_TYPE), TAG, "failed to set content type");
     ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*"), TAG, "failed to set access control allow origin");
     ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(req, "X-Framerate", http_string), TAG, "failed to set x framerate");
+
+    PoseEstimationResult *pe_result_snapshot = (PoseEstimationResult *)calloc(1, sizeof(PoseEstimationResult));
+    ESP_RETURN_ON_FALSE(pe_result_snapshot != NULL, ESP_ERR_NO_MEM, TAG, "failed to alloc pose snapshot");
 
     while (1) {
         int hlen;
@@ -489,6 +559,8 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
         // ESP_LOGW(TAG, "Try DQ");
         ESP_RETURN_ON_ERROR(ioctl(video->fd, VIDIOC_DQBUF, &buf), TAG, "failed to receive video frame");
         // ESP_LOGW(TAG, "DQ OK");
+
+        
 
         if (!(buf.flags & V4L2_BUF_FLAG_DONE)) {
             ESP_RETURN_ON_ERROR(ioctl(video->fd, VIDIOC_QBUF, &buf), TAG, "failed to queue video frame");
@@ -510,51 +582,55 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
         //         }
         // }
         // higherhrnet
-        PoseKeyPoints* kps_group = g_pe_result.kps_group;
-        BBox* bboxs = g_pe_result.bboxs;
-        for (int i=0; i<g_pe_result.valid_num; ++i) {
-            uint32_t x1_ = bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1920);
-            uint32_t y1_ = bbox_coordinate_x_scale_map((int)(bboxs[i].y1), 288, 1080);
-            uint32_t x2_ = bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1920);
-            uint32_t y2_ = bbox_coordinate_x_scale_map((int)(bboxs[i].y2), 288, 1080);
-            esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, x1_, y1_, x1_, y2_, ESP_PAINTER_COLOR_RED, 30);
-            esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, x1_, y1_, x2_, y1_, ESP_PAINTER_COLOR_RED, 30);
-            esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, x2_, y2_, x1_, y2_, ESP_PAINTER_COLOR_RED, 30);
-            esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, x2_, y2_, x2_, y1_, ESP_PAINTER_COLOR_RED, 30);
-            // uint32_t k_x[17];
-            // uint32_t k_y[17];
-            // for (int j=0; j < 17; ++j) {
-            //     k_x[j] = bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1920);
-            //     k_y[j] = bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].y1), 288, 1080);
-            //     esp_painter_draw_point(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, k_x[j], k_y[j], ESP_PAINTER_COLOR_RED, 10);
-            // }
-
-            // for (int s = 0; s < (sizeof(skeleton) / sizeof(skeleton[0])); ++s) {
-            //     uint8_t p1 = skeleton[s].a;
-            //     uint8_t p2 = skeleton[s].b;
-
-            //     if (k_x[p1] == 0 || k_y[p1] == 0 ||
-            //         k_x[p2] == 0 || k_y[p2] == 0) {
-            //         continue;
-            //     }
-
-            //     esp_painter_draw_line(
-            //         painter_handle,
-            //         (uint8_t *)video->buffer[buf.index],
-            //         video->buffer_size,
-            //         k_x[p1], k_y[p1],
-            //         k_x[p2], k_y[p2],
-            //         ESP_PAINTER_COLOR_RED,
-            //         30
-            //     );
-            // }
+        if (!get_pe_result_copy(pe_result_snapshot)) {
+            // 若无新AI推理结构则使用上一次结果
+            ;
         }
-        // Draw a string with specified RGB color on a buffer
-        // esp_painter_draw_string(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 100, 100, &esp_painter_basic_font_24, ESP_PAINTER_COLOR_RED, "Hello World");
-        // Draw a line with specified RGB color on a buffer
-        // esp_painter_draw_line(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 100, 100, 200, 200, ESP_PAINTER_COLOR_RED, 30);
-        // Draw a point with specified RGB color on a buffer
-        // esp_painter_draw_point(painter_handle, (uint8_t *)video->buffer[buf.index], video->buffer_size, 400, 400, ESP_PAINTER_COLOR_RED, 10);
+        PoseKeyPoints* kps_group = pe_result_snapshot->kps_group;
+        BBox* bboxs = pe_result_snapshot->bboxs;
+        
+        for (int i=0; i<pe_result_snapshot->valid_num; ++i) {
+            draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1920),
+                    bbox_coordinate_y_scale_map((int)(bboxs[i].y1), 288, 1080),
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1920), 
+                    bbox_coordinate_y_scale_map((int)(bboxs[i].y2), 288, 1080),
+                    0, 0, 255, 0, 0, 6, false);
+
+            uint32_t k_x[17];
+            uint32_t k_y[17];
+
+            for (int j=0; j < 17; ++j) {
+                k_x[j] = bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1920);
+                k_y[j] = bbox_coordinate_y_scale_map((int)(kps_group[i].data[j].y1), 288, 1080);
+            }
+
+            for (int s = 0; s < (sizeof(skeleton) / sizeof(skeleton[0])); ++s) {
+                uint8_t p1 = skeleton[s].a;
+                uint8_t p2 = skeleton[s].b;
+
+                if (k_x[p1] == 0 || k_y[p1] == 0 ||
+                    k_x[p2] == 0 || k_y[p2] == 0) {
+                    continue;
+                }
+
+                draw_line_rgb((uint16_t*)video->buffer[buf.index],
+                   video->width, video->height,
+                   k_x[p1], k_y[p1],
+                   k_x[p2], k_y[p2],
+                   0, 0,
+                   255, 0, 0,
+                   6,
+                   false);
+            }
+
+            for (int j=0; j < 17; ++j) {
+                draw_point_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
+                    k_x[j],
+                    k_y[j],
+                    0, 0, 0, 255, 0, 10, false);
+            }
+        }
 
         if (video->pixel_format == V4L2_PIX_FMT_JPEG) {
             video->jpeg_out_buf = video->buffer[buf.index];
@@ -588,6 +664,7 @@ fail0:
     if (locked) {
         xSemaphoreGive(video->sem);
     }
+    free(pe_result_snapshot);
     ioctl(video->fd, VIDIOC_QBUF, &buf);
     return ret;
 }
@@ -1151,43 +1228,81 @@ static void metadata_reader_task(void *arg)
 {
     metadata_frame_t frame;
     int ret;
+    uint8_t write_index = 0;
+
     while (true) {
-        ret = read_metadata(metadata_buf, MAX_DATA_R_BUF_SIZE, &frame.data_size);
-        if (metadata_queue && ret == 0) {
-            ESP_LOGI(TAG, "Read metadata len: %ld", frame.data_size);
-            xQueueSend(metadata_queue, &frame, portMAX_DELAY);
+
+        /* 找一个空闲 buffer */
+        bool found = false;
+        for (int i = 0; i < METADATA_PINGPONG_NUM; i++) {
+            if (!metadata_buf_busy[i]) {
+                write_index = i;
+                found = true;
+                break;
+            }
         }
+
+        if (!found) {
+            // 两个 buffer 都在用，说明 parser 跟不上
+            ESP_LOGW(TAG, "No free metadata buffer, drop frame");
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+
+        /* 读数据到选中的 buffer */
+        ret = read_metadata(metadata_buf_pool[write_index],
+                            MAX_DATA_R_BUF_SIZE,
+                            &frame.data_size);
+
+        if (ret != 0 || frame.data_size == 0) {
+            continue;
+        }
+
+        metadata_buf_busy[write_index] = true;
+
+        frame.data      = metadata_buf_pool[write_index];
+        frame.index     = write_index;
+
+        ESP_LOGI(TAG, "Read metadata idx=%d len=%ld",
+                 write_index, frame.data_size);
+
+        xQueueSend(metadata_queue, &frame, portMAX_DELAY);
     }
 }
+
 
 static void metadata_parser_task(void *arg)
 {
     metadata_frame_t frame;
 
     while (xQueueReceive(metadata_queue, &frame, portMAX_DELAY) == pdTRUE) {
-        if (frame.data_size == 0 || frame.data_size > MAX_DATA_R_BUF_SIZE) {
-            ESP_LOGW(TAG, "Invalid metadata size: %" PRIu32, frame.data_size);
+
+        if (frame.data_size == 0 ||
+            frame.data_size > MAX_DATA_R_BUF_SIZE) {
+
+            ESP_LOGW(TAG, "Invalid metadata size: %" PRIu32,
+                     frame.data_size);
+            metadata_buf_busy[frame.index] = false;
             continue;
         }
 
-        uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
-        // printf("\n\n\n");
-        // print_buf_hex(metadata, frame.data_size);
-        // printf("\n\n\n");
+        uint8_t *metadata = frame.data + VALID_DATA_OFFSET;
 
-        // print_buf_hex(metadata, 12);
-        // printf("\n");
-
-        if(parse_ap_params(metadata, frame.data_size)) {
-            // detect_postprocess_yolov8n();
-            pose_estimate_postprocess_higherhrnet();
-            // print_pose_estimation_result();
-            // ESP_LOGW(TAG, "Parse Ap Params Failed.");
-            // skip
+        // if(test_spi_bus_by_sim_data(metadata, frame.data_size)) {
+        //     ESP_LOGI(TAG, "TEST PASS");
+        //     print_buf_hex(metadata, 100);
+        //     printf("\n");
+        if (parse_ap_params(metadata, frame.data_size) &&
+            pose_estimate_postprocess_higherhrnet()) {
+            submit_pe_result_from_global();
+        } else {
+            // ESP_LOGE(TAG, "TEST NO PASS");
         }
-        // ESP_LOGI(TAG, "data_size: %d\n", frame.data_size);
+
+        metadata_buf_busy[frame.index] = false;
     }
 }
+
 
 void init_i2c_dev(void) {
     i2c_master_get_bus_handle(0, &g_bus_handle);
@@ -1323,19 +1438,14 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Camera web server starts");
 
-    metadata_buf = (uint8_t *)malloc(MAX_DATA_R_BUF_SIZE);
-    if (!metadata_buf) {
-        ESP_LOGE(TAG, "Failed to allocate metadata buffer");
-        return;
-    }
-
-    metadata_queue = xQueueCreate(1, sizeof(metadata_frame_t));
+    metadata_queue = xQueueCreate(METADATA_PINGPONG_NUM, sizeof(metadata_frame_t));
     if (!metadata_queue) {
         ESP_LOGE(TAG, "Failed to create metadata queue");
         return;
     }
-
+    init_metadata_buf_pool();
+    init_pe_result_pool();
     xTaskCreatePinnedToCore(metadata_reader_task, "metadata_reader", 4096, NULL, 5, NULL, 1);
-    xTaskCreatePinnedToCore(metadata_parser_task, "metadata_parser", 4096, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(metadata_parser_task, "metadata_parser", 8192, NULL, 5, NULL, 0);
 
 }

@@ -115,6 +115,23 @@ matchByTag(const vector<vector<float>>& transposed_tag,
     float tag_threshold) {
     vector<vector<array<float, 4>>> persons;
     vector<vector<float>> person_tags;
+    vector<float> person_keys;
+
+    auto set_person_joint_by_tag = [&](const JointDetection& det, int32_t target_joint_idx) {
+        auto it = std::find(person_keys.begin(), person_keys.end(), det.tag);
+        if (it == person_keys.end()) {
+            vector<array<float, 4>> person(num_joints, { 0, 0, 0, 0 });
+            person[target_joint_idx] = { det.x, det.y, det.score, det.tag };
+            persons.push_back(person);
+            person_tags.push_back({ det.tag });
+            person_keys.push_back(det.tag);
+            return;
+        }
+
+        size_t person_idx = std::distance(person_keys.begin(), it);
+        persons[person_idx][target_joint_idx] = { det.x, det.y, det.score, det.tag };
+        person_tags[person_idx] = { det.tag };
+    };
 
     // 遍历每个关节（按照 joint_order 顺序），注意这里 joint 的索引为 transposed 版中的行索引
     for (int32_t i = 0; i < num_joints; i++) {
@@ -138,10 +155,7 @@ matchByTag(const vector<vector<float>>& transposed_tag,
         // 第一关节或尚未创建人体记录时，直接将每个检测作为新人体
         if (i == 0 || persons.empty()) {
             for (auto& det : detections) {
-                vector<array<float, 4>> person(num_joints, { 0, 0, 0, 0 });
-                person[joint_idx] = { det.x, det.y, det.score, det.tag };
-                persons.push_back(person);
-                person_tags.push_back({ det.tag });
+                set_person_joint_by_tag(det, joint_idx);
             }
         }
         else {
@@ -208,21 +222,15 @@ matchByTag(const vector<vector<float>>& transposed_tag,
                     detection_assigned[d] = true;
                 }
                 else {
-                    // 匹配代价过大，新建一个人体记录
-                    vector<array<float, 4>> person(num_joints, { 0, 0, 0, 0 });
-                    person[joint_idx] = { detections[d].x, detections[d].y, detections[d].score, detections[d].tag };
-                    persons.push_back(person);
-                    person_tags.push_back({ detections[d].tag });
+                    // 匹配代价过大，按 tag 创建/覆盖人体记录（与 Python setdefault 行为一致）
+                    set_person_joint_by_tag(detections[d], joint_idx);
                     detection_assigned[d] = true;
                 }
             }
             // 对于未匹配的检测，新建人体记录
             for (int32_t d = 0; d < num_detections; d++) {
                 if (!detection_assigned[d]) {
-                    vector<array<float, 4>> person(num_joints, { 0, 0, 0, 0 });
-                    person[joint_idx] = { detections[d].x, detections[d].y, detections[d].score, detections[d].tag };
-                    persons.push_back(person);
-                    person_tags.push_back({ detections[d].tag });
+                    set_person_joint_by_tag(detections[d], joint_idx);
                 }
             }
 
