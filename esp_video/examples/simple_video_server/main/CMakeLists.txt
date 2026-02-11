@@ -6,7 +6,10 @@ set(srcs
         "utils.cc"
         "app_lcd.c"
         "app_video.c"
+        "esp_painter.c"
         )
+
+file(GLOB_RECURSE FONT_SRCS font/*.c)
 
 set(incs 
         "."
@@ -18,6 +21,6 @@ set(html_files "../frontend/gzipped/index.html.gz"
                "../frontend/gzipped/assets/index.js.gz"
                "../frontend/gzipped/assets/index.css.gz")
 
-idf_component_register(SRCS "${srcs}"
+idf_component_register(SRCS "${srcs}" "${FONT_SRCS}"
                        PRIV_INCLUDE_DIRS "${incs}"
                        EMBED_TXTFILES ${html_files})
