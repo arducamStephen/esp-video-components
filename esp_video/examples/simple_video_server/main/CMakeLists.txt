@@ -5,6 +5,7 @@ set(srcs
         "ArducamIMX500SDK.cc"
         "utils.cc"
         "app_lcd.c"
+        "app_video.c"
         )
 
 set(incs 
