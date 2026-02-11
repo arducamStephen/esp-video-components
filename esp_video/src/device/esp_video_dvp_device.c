@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: ESPRESSIF MIT
  */
@@ -15,7 +15,6 @@
 #include "esp_video.h"
 #include "esp_video_cam.h"
 #include "esp_video_device_internal.h"
-#include "esp_video_ioctl.h"
 #if CONFIG_ESP_VIDEO_ENABLE_SWAP_BYTE
 #include "esp_video_swap_byte.h"
 #endif
@@ -43,8 +42,6 @@
 
 struct dvp_video {
     cam_ctlr_color_t in_color;
-    /* The actual data format output by the camera sensor. Note that in some cases, byte order conversion may be required.*/
-    esp_cam_sensor_output_format_t sensor_pixel_format;
 
     esp_cam_ctlr_handle_t cam_ctrl_handle;
 
@@ -64,24 +61,14 @@ static esp_err_t dvp_get_input_frame_type(esp_cam_sensor_output_format_t sensor_
     esp_err_t ret = ESP_OK;
 
     switch (sensor_format) {
-    case ESP_CAM_SENSOR_PIXFORMAT_RGB565_LE:
+    case ESP_CAM_SENSOR_PIXFORMAT_RGB565:
         *in_color = CAM_CTLR_COLOR_RGB565;
         *v4l2_format = V4L2_PIX_FMT_RGB565;
         *bpp = 16;
         break;
-    case ESP_CAM_SENSOR_PIXFORMAT_RGB565_BE:
-        *in_color = CAM_CTLR_COLOR_RGB565;
-        *v4l2_format = V4L2_PIX_FMT_RGB565X;
-        *bpp = 16;
-        break;
-    case ESP_CAM_SENSOR_PIXFORMAT_YUV422_UYVY:
+    case ESP_CAM_SENSOR_PIXFORMAT_YUV422:
         *in_color = CAM_CTLR_COLOR_YUV422;
-        *v4l2_format = V4L2_PIX_FMT_UYVY;
-        *bpp = 16;
-        break;
-    case ESP_CAM_SENSOR_PIXFORMAT_YUV422_YUYV:
-        *in_color = CAM_CTLR_COLOR_YUV422;
-        *v4l2_format = V4L2_PIX_FMT_YUYV;
+        *v4l2_format = V4L2_PIX_FMT_YUV422P;
         *bpp = 16;
         break;
     case ESP_CAM_SENSOR_PIXFORMAT_RGB888:
@@ -190,7 +177,6 @@ static esp_err_t init_config(struct esp_video *video)
     };
     ESP_RETURN_ON_ERROR(esp_video_config_buffer(video, &format, DVP_MEM_CAPS), TAG, "failed to configure stream buffer");
 
-    dvp_video->sensor_pixel_format = sensor_format.format;
     return ESP_OK;
 }
 
@@ -219,23 +205,15 @@ static esp_err_t dvp_video_start(struct esp_video *video, uint32_t type)
     ESP_LOGD(TAG, "alignments=%zu", alignments);
 
 #if CONFIG_ESP_VIDEO_ENABLE_SWAP_BYTE
-    bool need_swap_byte = false;
+    uint32_t data_seq;
 
-    if (dvp_video->in_color == CAM_CTLR_COLOR_RGB565) {
-        uint32_t v4l2_format = CAPTURE_VIDEO_GET_FORMAT_PIXEL_FORMAT(video);
-        uint32_t sensor_pixel_format = dvp_video->sensor_pixel_format;
-
-        if ((sensor_pixel_format == ESP_CAM_SENSOR_PIXFORMAT_RGB565_BE && v4l2_format == V4L2_PIX_FMT_RGB565) ||
-                (sensor_pixel_format == ESP_CAM_SENSOR_PIXFORMAT_RGB565_LE && v4l2_format == V4L2_PIX_FMT_RGB565X)) {
-            need_swap_byte = true;
-        }
-    }
-
-    if (need_swap_byte) {
+    dvp_video->swap_byte = NULL;
+    ret = esp_cam_sensor_get_para_value(sensor, ESP_CAM_SENSOR_DATA_SEQ, &data_seq, sizeof(data_seq));
+    if (ret == ESP_OK && (data_seq == ESP_CAM_SENSOR_DATA_SEQ_BYTE_SWAPPED)) {
         dvp_video->swap_byte = esp_video_swap_byte_create();
-        ESP_RETURN_ON_FALSE(dvp_video->swap_byte, ESP_FAIL, TAG, "failed to create swap byte");
-    } else {
-        dvp_video->swap_byte = NULL;
+        if (!dvp_video->swap_byte) {
+            return ESP_ERR_NO_MEM;
+        }
     }
 #endif
 
@@ -378,25 +356,15 @@ static esp_err_t dvp_video_enum_format(struct esp_video *video, uint32_t type, u
 static esp_err_t dvp_video_set_format(struct esp_video *video, const struct v4l2_format *format)
 {
     const struct v4l2_pix_format *pix = &format->fmt.pix;
-    struct dvp_video *dvp_video = VIDEO_PRIV_DATA(struct dvp_video *, video);
 
     if (pix->width != CAPTURE_VIDEO_GET_FORMAT_WIDTH(video) ||
-            pix->height != CAPTURE_VIDEO_GET_FORMAT_HEIGHT(video)) {
-        ESP_LOGE(TAG, "input width=%" PRIu32 ", height=%" PRIu32 " is not supported", pix->width, pix->height);
+            pix->height != CAPTURE_VIDEO_GET_FORMAT_HEIGHT(video) ||
+            pix->pixelformat != CAPTURE_VIDEO_GET_FORMAT_PIXEL_FORMAT(video)) {
+        ESP_LOGE(TAG, "format is not supported");
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (dvp_video->in_color == CAM_CTLR_COLOR_RGB565) {
-        if (pix->pixelformat != V4L2_PIX_FMT_RGB565 && pix->pixelformat != V4L2_PIX_FMT_RGB565X) {
-            ESP_LOGE(TAG, "format=" V4L2_FMT_STR " is not supported", V4L2_FMT_STR_ARG(pix->pixelformat));
-            return ESP_ERR_INVALID_ARG;
-        }
-    }
-
-    CAPTURE_VIDEO_SET_FORMAT(video,
-                             pix->width,
-                             pix->height,
-                             pix->pixelformat);
+    ESP_RETURN_ON_ERROR(esp_video_config_buffer(video, format, DVP_MEM_CAPS), TAG, "failed to configure stream buffer");
 
     return ESP_OK;
 }

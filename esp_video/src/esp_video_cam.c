@@ -292,7 +292,7 @@ esp_err_t esp_video_cam_set_ext_ctrls(esp_video_cam_t *cam, const struct v4l2_ex
             case ESP_CAM_SENSOR_PARAM_TYPE_NUMBER:
                 if ((value_buf > qdesc.number.maximum) || (value_buf < qdesc.number.minimum) ||
                         (value_buf % qdesc.number.step)) {
-                    ESP_LOGE(TAG, "number: ctrl id=%" PRIx32 " value=%" PRIi32 " is out of range(max=%" PRIi32 ", min=%" PRIi32 ", step=%"PRIu32")",
+                    ESP_LOGE(TAG, "number: ctrl id=%" PRIx32 " value=%" PRIi32 " is out of range(max=%" PRIi32 ", min=%" PRIi32 ", step=%" PRIu32 ")",
                              ctrl->id, value_buf, (int32_t)qdesc.number.maximum, (int32_t)qdesc.number.minimum, (uint32_t)qdesc.number.step);
                     return ESP_ERR_INVALID_ARG;
                 }

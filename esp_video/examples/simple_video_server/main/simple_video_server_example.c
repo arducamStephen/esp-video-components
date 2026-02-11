@@ -35,7 +35,13 @@
 #include "driver/ppa.h"
 #include "esp_painter.h"
 #include "app_drawing_utils.h"
-
+#include "esp_cache.h"
+#include "esp_heap_caps.h"
+#include "esp_private/esp_cache_private.h"
+#include "esp_lcd_mipi_dsi.h"
+#include "esp_lcd_panel_ops.h"
+#include "app_lcd.h"
+#include "app_video.h"
 
 #define SPI_MAX_DMA_BYTES        4096
 #define SPI_DUMMY_BYTE           0xFF
@@ -78,6 +84,24 @@ void init_i2c_dev(void);
 esp_err_t i2c_write_reg16_u32(uint16_t reg, uint32_t value);
 esp_err_t i2c_read_reg16_u32(uint16_t reg,uint32_t *out);
 int32_t spi_read(uint8_t *buf, uint32_t size);
+//lcd
+static esp_lcd_panel_handle_t display_panel;
+static ppa_client_handle_t ppa_srm_handle = NULL;
+static size_t data_cache_line_size = 0;
+static void *lcd_buffer[EXAMPLE_LCD_BUF_NUM];
+
+esp_painter_handle_t painter_handle;
+esp_painter_config_t painter_config = {
+    .color_format = ESP_PAINTER_COLOR_FORMAT_RGB565,
+    .default_font = &esp_painter_basic_font_24,
+    .swap_rgb565 = false,
+};
+
+#if CONFIG_EXAMPLE_ENABLE_PRINT_FPS_RATE_VALUE
+static int fps_count;
+static int64_t start_time;
+#endif
+
 
 #define EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER  CONFIG_EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER
 #define EXAMPLE_JPEG_ENC_QUALITY            CONFIG_EXAMPLE_JPEG_COMPRESSION_QUALITY
@@ -457,16 +481,18 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
     char http_string[128];
     bool locked = false;
     web_cam_video_t *video = (web_cam_video_t *)req->user_ctx;
-    esp_painter_handle_t painter_handle;
-    esp_painter_config_t painter_config = {
-        .canvas = {
-            .width = video->width,
-            .height = video->height,
-        },
-        .color_format = ESP_PAINTER_COLOR_FORMAT_RGB565,
-        .default_font = &esp_painter_basic_font_24,
-        .swap_rgb565 = false,
-    };
+    // esp_painter_handle_t painter_handle;
+    // esp_painter_config_t painter_config = {
+    //     .canvas = {
+    //         .width = video->width,
+    //         .height = video->height,
+    //     },
+    //     .color_format = ESP_PAINTER_COLOR_FORMAT_RGB565,
+    //     .default_font = &esp_painter_basic_font_24,
+    //     .swap_rgb565 = false,
+    // };
+    painter_config.canvas.width = video->width;
+    painter_config.canvas.height = video->height;
     esp_painter_init(&painter_config, &painter_handle);
 
     ESP_RETURN_ON_FALSE(snprintf(http_string, sizeof(http_string), "%" PRIu32, video->frame_rate) > 0,
@@ -1235,6 +1261,64 @@ esp_err_t i2c_read_reg16_u32(uint16_t reg,uint32_t *out) {
     return ESP_OK;
 }
 
+void camera_video_frame_operation(uint8_t *camera_buf, uint8_t camera_buf_index, uint32_t camera_buf_hes, uint32_t camera_buf_ves, size_t camera_buf_len, void *user_data)
+{
+#if CONFIG_EXAMPLE_ENABLE_PRINT_FPS_RATE_VALUE
+    fps_count++;
+    if (fps_count == 50) {
+        int64_t end_time = esp_timer_get_time();
+        ESP_LOGI(TAG, "fps: %f", 1000000.0 / ((end_time - start_time) / 50.0));
+        start_time = end_time;
+        fps_count = 0;
+
+        ESP_LOGI(TAG, "camera_buf_hes: %lu, camera_buf_ves: %lu, camera_buf_len: %d KB", camera_buf_hes, camera_buf_ves, camera_buf_len / 1024);
+    }
+#endif
+
+    ppa_srm_oper_config_t srm_config = {
+        .in.buffer = camera_buf,
+        .in.pic_w = camera_buf_hes,
+        .in.pic_h = camera_buf_ves,
+        .in.block_w = camera_buf_hes,
+        .in.block_h = camera_buf_ves,
+        .in.block_offset_x = (camera_buf_hes > EXAMPLE_LCD_H_RES) ? (camera_buf_hes - EXAMPLE_LCD_H_RES) / 2 : 0,
+           .in.block_offset_y = (camera_buf_ves > EXAMPLE_LCD_V_RES) ? (camera_buf_ves - EXAMPLE_LCD_V_RES) / 2 : 0,
+           .in.srm_cm = APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? PPA_SRM_COLOR_MODE_RGB565 : PPA_SRM_COLOR_MODE_RGB888,
+           .out.buffer = lcd_buffer[camera_buf_index],
+           .out.buffer_size = ALIGN_UP(EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES * (APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? 2 : 3), data_cache_line_size),
+           .out.pic_w = EXAMPLE_LCD_H_RES,
+           .out.pic_h = EXAMPLE_LCD_V_RES,
+           .out.block_offset_x = 0,
+           .out.block_offset_y = 0,
+           .out.srm_cm = APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? PPA_SRM_COLOR_MODE_RGB565 : PPA_SRM_COLOR_MODE_RGB888,
+           .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
+           .scale_x = 1,
+           .scale_y = 1,
+           .rgb_swap = 0,
+           .byte_swap = 0,
+           .mode = PPA_TRANS_MODE_BLOCKING,
+    };
+
+    if (camera_buf_hes > EXAMPLE_LCD_H_RES || camera_buf_ves > EXAMPLE_LCD_V_RES) {
+        // The resolution of the camera does not match the LCD resolution. Image processing can be done using PPA, but there will be some frame rate loss
+
+        srm_config.in.block_w = (camera_buf_hes > EXAMPLE_LCD_H_RES) ? EXAMPLE_LCD_H_RES : camera_buf_hes;
+        srm_config.in.block_h = (camera_buf_ves > EXAMPLE_LCD_V_RES) ? EXAMPLE_LCD_V_RES : camera_buf_ves;
+
+        ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
+
+        esp_painter_draw_line(painter_handle, (uint8_t *)lcd_buffer[camera_buf_index], srm_config.out.buffer_size, 400, 400, 500, 500, ESP_PAINTER_COLOR_RED, 30);
+
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(display_panel, 0, 0, srm_config.in.block_w, srm_config.in.block_h, lcd_buffer[camera_buf_index]));
+    } else {
+
+        esp_painter_draw_line(painter_handle, (uint8_t *)camera_buf, srm_config.out.buffer_size, 400, 400, 500, 500, ESP_PAINTER_COLOR_RED, 30);
+
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(display_panel, 0, 0, camera_buf_hes, camera_buf_ves, camera_buf));
+    }
+}
+
+
 void app_main(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -1274,7 +1358,7 @@ void app_main(void)
     //    vTaskDelay(pdMS_TO_TICKS(10));
     // }
     
-
+#if 0
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -1289,31 +1373,31 @@ void app_main(void)
     ESP_ERROR_CHECK(example_connect());
 
     web_cam_video_config_t config[] = {
-#if EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR
-        {
-            .dev_name = ESP_VIDEO_MIPI_CSI_DEVICE_NAME,
-        },
-#endif /* EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR */
-#if EXAMPLE_ENABLE_DVP_CAM_SENSOR
-        {
-            .dev_name = ESP_VIDEO_DVP_DEVICE_NAME,
-        },
-#endif /* EXAMPLE_ENABLE_DVP_CAM_SENSOR */
-#if EXAMPLE_ENABLE_SPI_CAM_0_SENSOR
-        {
-            .dev_name = ESP_VIDEO_SPI_DEVICE_NAME,
-        },
-#endif /* EXAMPLE_ENABLE_SPI_CAM_0_SENSOR */
-#if EXAMPLE_ENABLE_SPI_CAM_1_SENSOR
-        {
-            .dev_name = ESP_VIDEO_SPI_DEVICE_1_NAME,
-        },
-#endif /* EXAMPLE_ENABLE_SPI_CAM_1_SENSOR */
-#if EXAMPLE_ENABLE_USB_UVC_CAM_SENSOR
-        {
-            .dev_name = ESP_VIDEO_USB_UVC_DEVICE_NAME(0),
-        },
-#endif /* EXAMPLE_ENABLE_USB_UVC_CAM_SENSOR */
+    #if EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR
+            {
+                .dev_name = ESP_VIDEO_MIPI_CSI_DEVICE_NAME,
+            },
+    #endif /* EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR */
+    #if EXAMPLE_ENABLE_DVP_CAM_SENSOR
+            {
+                .dev_name = ESP_VIDEO_DVP_DEVICE_NAME,
+            },
+    #endif /* EXAMPLE_ENABLE_DVP_CAM_SENSOR */
+    #if EXAMPLE_ENABLE_SPI_CAM_0_SENSOR
+            {
+                .dev_name = ESP_VIDEO_SPI_DEVICE_NAME,
+            },
+    #endif /* EXAMPLE_ENABLE_SPI_CAM_0_SENSOR */
+    #if EXAMPLE_ENABLE_SPI_CAM_1_SENSOR
+            {
+                .dev_name = ESP_VIDEO_SPI_DEVICE_1_NAME,
+            },
+    #endif /* EXAMPLE_ENABLE_SPI_CAM_1_SENSOR */
+    #if EXAMPLE_ENABLE_USB_UVC_CAM_SENSOR
+            {
+                .dev_name = ESP_VIDEO_USB_UVC_DEVICE_NAME(0),
+            },
+    #endif /* EXAMPLE_ENABLE_USB_UVC_CAM_SENSOR */
     };
 
     int config_count = sizeof(config) / sizeof(config[0]);
@@ -1322,6 +1406,70 @@ void app_main(void)
     ESP_ERROR_CHECK(start_cam_web_server(config, config_count));
 
     ESP_LOGI(TAG, "Camera web server starts");
+#else
+    // Initialize the LCD
+    ESP_ERROR_CHECK(app_lcd_init(&display_panel));
+
+    painter_config.canvas.width = EXAMPLE_LCD_H_RES;
+    painter_config.canvas.height = EXAMPLE_LCD_V_RES;
+    esp_painter_init(&painter_config, &painter_handle);
+
+    // Initialize the PPA
+    ppa_client_config_t ppa_srm_config = {
+        .oper_type = PPA_OPERATION_SRM,
+    };
+    ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
+    ESP_ERROR_CHECK(esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &data_cache_line_size));
+
+    // Initialize the video camera
+    // ret = app_video_main(NULL);
+    // if (ret != ESP_OK) {
+    //     ESP_LOGE(TAG, "video main init failed with error 0x%x", ret);
+    //     return;
+    // }
+
+    // Open the video device
+    int video_cam_fd0 = app_video_open(EXAMPLE_CAM_DEV_PATH, APP_VIDEO_FMT);
+    if (video_cam_fd0 < 0) {
+        ESP_LOGE(TAG, "video cam open failed");
+        return;
+    }
+
+    // Get the LCD frame buffer
+    #if EXAMPLE_LCD_BUF_NUM == 2
+        ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(display_panel, 2, &lcd_buffer[0], &lcd_buffer[1]));
+    #else
+        ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(display_panel, 3, &lcd_buffer[0], &lcd_buffer[1], &lcd_buffer[2]));
+    #endif
+
+    // Set the video buffer
+    #if CONFIG_EXAMPLE_USE_MEMORY_MAPPING
+        ESP_LOGI(TAG, "Using map buffer");
+        ESP_ERROR_CHECK(app_video_set_bufs(video_cam_fd0, EXAMPLE_CAM_BUF_NUM, NULL)); // When setting the camera video buffer, it can be written as NULL to automatically allocate the buffer using mapping
+    #else
+        ESP_LOGI(TAG, "Using user defined buffer");
+        #if CONFIG_CAMERA_SC2336_MIPI_RAW8_1024x600_30FPS
+            ESP_ERROR_CHECK(app_video_set_bufs(video_cam_fd0, EXAMPLE_CAM_BUF_NUM, (void *)lcd_buffer));
+        #else
+            void *camera_buf[EXAMPLE_CAM_BUF_NUM];
+            for (int i = 0; i < EXAMPLE_CAM_BUF_NUM; i++) {
+                camera_buf[i] = heap_caps_aligned_calloc(data_cache_line_size, 1, app_video_get_buf_size(), MALLOC_CAP_SPIRAM);
+            }
+            ESP_ERROR_CHECK(app_video_set_bufs(video_cam_fd0, EXAMPLE_CAM_BUF_NUM, (void *)camera_buf));
+        #endif
+    #endif
+
+    // Register the video frame operation callback
+    ESP_ERROR_CHECK(app_video_register_frame_operation_cb(camera_video_frame_operation));
+
+    // Start the camera stream task
+    ESP_ERROR_CHECK(app_video_stream_task_start(video_cam_fd0, 0, NULL));
+
+    #if CONFIG_EXAMPLE_ENABLE_PRINT_FPS_RATE_VALUE
+        start_time = esp_timer_get_time();  // Get the initial time for frame rate statistics
+    #endif
+
+#endif
 
     metadata_buf = (uint8_t *)malloc(MAX_DATA_R_BUF_SIZE);
     if (!metadata_buf) {
