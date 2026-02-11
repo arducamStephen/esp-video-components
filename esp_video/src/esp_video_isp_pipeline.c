@@ -1069,7 +1069,13 @@ static esp_err_t init_cam_dev(const esp_video_isp_config_t *config, esp_video_is
         controls.count      = 1;
         controls.controls   = control;
         control[0].id       = V4L2_CID_EXPOSURE;
-        control[0].value    = qctrl.default_value;
+        int64_t default_val = qctrl.default_value;
+        if (default_val < qctrl.minimum) {
+            default_val = qctrl.minimum;
+        } else if (default_val > qctrl.maximum) {
+            default_val = qctrl.maximum;
+        }
+        control[0].value    = (int32_t)default_val;
         ret = ioctl(fd, VIDIOC_S_EXT_CTRLS, &controls);
         ESP_GOTO_ON_FALSE(ret == 0, ESP_ERR_NOT_SUPPORTED, fail_0, TAG, "failed to set exposure value");
 

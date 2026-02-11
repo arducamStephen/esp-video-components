@@ -2,6 +2,10 @@ dependencies:
   idf: ">=5.3"
   esp_video:
     override_path: "../../../"
+  esp_cam_sensor:
+    override_path: "../../../../esp_cam_sensor"
+  esp_sccb_intf:
+    override_path: "../../../../esp_sccb_intf"
   example_video_common:
     override_path: "../../common_components/example_video_common"
   protocol_examples_common:
@@ -13,3 +17,6 @@ dependencies:
     version: "^1.7.15"
     rules:
       - if: "idf_version >= 6.0"
+  espressif/esp_lcd_ek79007:
+    version: "*"
+    public: true
