@@ -4,12 +4,7 @@ set(srcs
         "app_drawing_utils.c"
         "ArducamIMX500SDK.cc"
         "utils.cc"
-        "app_lcd.c"
-        "app_video.c"
-        "esp_painter.c"
         )
-
-file(GLOB_RECURSE FONT_SRCS font/*.c)
 
 set(incs 
         "."
@@ -21,6 +16,6 @@ set(html_files "../frontend/gzipped/index.html.gz"
                "../frontend/gzipped/assets/index.js.gz"
                "../frontend/gzipped/assets/index.css.gz")
 
-idf_component_register(SRCS "${srcs}" "${FONT_SRCS}"
+idf_component_register(SRCS "${srcs}"
                        PRIV_INCLUDE_DIRS "${incs}"
                        EMBED_TXTFILES ${html_files})

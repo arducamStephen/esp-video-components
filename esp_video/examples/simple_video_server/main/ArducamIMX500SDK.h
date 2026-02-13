@@ -3,11 +3,10 @@
 
 #define IMX500_HEADER_LEN           12
 
+#define DEVICE_VERSION_REG          0x0101
 #define METADATA_SIZE_REG           0x0701
 #define DATA_READY_STATUS_REG       0x0705 
 #define CAPTURE_METADATA_REG        0x0706
-#define METADATA_SEND_SPI_MODE_REG  0x0707
-#define BOOT_MODE_REG               0x0708
 #define BOOT_STATUS_REG             0x0709
 #define START_BOOT_REG              0x0710
 
@@ -70,6 +69,9 @@ extern "C" {
 extern DetectionResult g_d_result;
 extern PoseEstimationResult g_pe_result;
 
+bool get_pose_estimation_result(PoseEstimationResult *out_result);
+void clear_pose_estimation_result(void);
+
 void unpack_imx500_output_header(const uint8_t* data, IMX500OutputHeader* header);
 bool parse_ap_params(const uint8_t* data, size_t data_len);
 void print_pose_estimation_result(void);
@@ -78,7 +80,6 @@ bool detect_postprocess_yolov8n(void);
 int32_t print_buf_hex(const uint8_t* buf, uint32_t len);
 uint32_t bbox_coordinate_x_scale_map(float x, uint32_t s_w, uint32_t t_w);
 uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h);
-bool test_spi_bus_by_sim_data(const uint8_t* data, size_t data_len);
 
 #ifdef __cplusplus
 }

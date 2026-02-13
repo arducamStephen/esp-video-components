@@ -34,40 +34,23 @@
 #include "ArducamIMX500SDK.h"
 #include "driver/ppa.h"
 #include "app_drawing_utils.h"
-#include "esp_cache.h"
-#include "esp_heap_caps.h"
-#include "esp_private/esp_cache_private.h"
-#include "esp_lcd_mipi_dsi.h"
-#include "esp_lcd_panel_ops.h"
-#include "app_lcd.h"
-#include "app_video.h"
-#include "esp_painter.h"
 
-#define METADATA_PINGPONG_NUM 2
-#define PE_RESULT_PINGPONG_NUM  2
+
 #define SPI_MAX_DMA_BYTES        4096
 #define SPI_DUMMY_BYTE           0xFF
-#define MAX_DATA_R_BUF_SIZE      1 * 1024 * 1024
+#define MAX_DATA_R_BUF_SIZE      2 * 1024 * 1024
 #define SPI_HOST                 SPI2_HOST
-// #define VALID_DATA_OFFSET           0
-// #define PIN_NUM_MOSI             GPIO_NUM_3
-// #define PIN_NUM_MISO             GPIO_NUM_2
-// #define PIN_NUM_CLK              GPIO_NUM_5
-// #define PIN_NUM_CS               GPIO_NUM_4
-
 #define VALID_DATA_OFFSET           0
-#define PIN_NUM_MOSI             GPIO_NUM_48
-#define PIN_NUM_MISO             GPIO_NUM_53
-#define PIN_NUM_CLK              GPIO_NUM_26
-#define PIN_NUM_CS               GPIO_NUM_47
+#define PIN_NUM_MOSI             GPIO_NUM_3
+#define PIN_NUM_MISO             GPIO_NUM_2
+#define PIN_NUM_CLK              GPIO_NUM_5
+#define PIN_NUM_CS               GPIO_NUM_4
 
-
-static uint8_t *metadata_buf_pool[METADATA_PINGPONG_NUM];
-static bool    metadata_buf_busy[METADATA_PINGPONG_NUM] = { false, false };
-static PoseEstimationResult *pe_result_pool[PE_RESULT_PINGPONG_NUM];
-static bool pe_result_busy[PE_RESULT_PINGPONG_NUM] = { false, false };
-
-static QueueHandle_t metadata_queue;
+// #define VALID_DATA_OFFSET           1
+// #define PIN_NUM_MOSI             GPIO_NUM_48
+// #define PIN_NUM_MISO             GPIO_NUM_53
+// #define PIN_NUM_CLK              GPIO_NUM_26
+// #define PIN_NUM_CS               GPIO_NUM_47
 
 typedef struct {
     uint8_t a;
@@ -93,24 +76,6 @@ void init_i2c_dev(void);
 esp_err_t i2c_write_reg16_u32(uint16_t reg, uint32_t value);
 esp_err_t i2c_read_reg16_u32(uint16_t reg,uint32_t *out);
 int32_t spi_read(uint8_t *buf, uint32_t size);
-//lcd
-static esp_lcd_panel_handle_t display_panel;
-static ppa_client_handle_t ppa_srm_handle = NULL;
-static size_t data_cache_line_size = 0;
-static void *lcd_buffer[EXAMPLE_LCD_BUF_NUM];
-
-esp_painter_handle_t painter_handle;
-esp_painter_config_t painter_config = {
-    .color_format = ESP_PAINTER_COLOR_FORMAT_RGB565,
-    .default_font = &esp_painter_basic_font_24,
-    .swap_rgb565 = false,
-};
-
-#if CONFIG_EXAMPLE_ENABLE_PRINT_FPS_RATE_VALUE
-static int fps_count;
-static int64_t start_time;
-#endif
-
 
 #define EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER  CONFIG_EXAMPLE_CAMERA_VIDEO_BUFFER_NUMBER
 #define EXAMPLE_JPEG_ENC_QUALITY            CONFIG_EXAMPLE_JPEG_COMPRESSION_QUALITY
@@ -174,82 +139,12 @@ typedef struct request_desc {
 } request_desc_t;
 
 static const char *TAG = "app";
+static QueueHandle_t metadata_queue;
+static uint8_t *metadata_buf;
 
 typedef struct metadata_frame {
-    uint8_t* data;
     uint32_t data_size;
-    uint8_t  index;
 } metadata_frame_t;
-
-void init_metadata_buf_pool(void) {
-    for (int i = 0; i < METADATA_PINGPONG_NUM; i++) {
-    metadata_buf_pool[i] = heap_caps_malloc(
-        MAX_DATA_R_BUF_SIZE,
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-    );
-    assert(metadata_buf_pool[i]);
-    }
-}
-
-void init_pe_result_pool(void)
-{
-    for (int i = 0; i < PE_RESULT_PINGPONG_NUM; i++) {
-
-        pe_result_pool[i] = heap_caps_malloc(
-            sizeof(PoseEstimationResult),
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT
-        );
-        assert(pe_result_pool[i]);
-        memset(pe_result_pool[i], 0, sizeof(PoseEstimationResult));
-    }
-}
-
-static void submit_pe_result_from_global(void)
-{
-    for (int i = 0; i < PE_RESULT_PINGPONG_NUM; i++) {
-        if (!pe_result_busy[i]) {
-
-            memcpy(pe_result_pool[i],
-                   &g_pe_result,
-                   sizeof(PoseEstimationResult));
-
-            pe_result_busy[i] = true;
-
-            ESP_LOGD(TAG,
-                     "PE result written to slot %d",
-                     i);
-            return;
-        }
-    }
-
-    ESP_LOGW(TAG,
-             "No free PE result slot, drop result");
-}
-
-bool get_pe_result_copy(PoseEstimationResult *out)
-{
-    if (!out) {
-        return false;
-    }
-
-    for (int i = 0; i < PE_RESULT_PINGPONG_NUM; i++) {
-        if (pe_result_busy[i]) {
-
-            memcpy(out,
-                   pe_result_pool[i],
-                   sizeof(PoseEstimationResult));
-
-            pe_result_busy[i] = false;
-
-            ESP_LOGD(TAG,
-                     "PE result slot %d consumed",
-                     i);
-            return true;
-        }
-    }
-
-    return false;
-}
 
 static bool is_valid_web_cam(web_cam_video_t *video)
 {
@@ -560,19 +455,6 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
     char http_string[128];
     bool locked = false;
     web_cam_video_t *video = (web_cam_video_t *)req->user_ctx;
-    // esp_painter_handle_t painter_handle;
-    // esp_painter_config_t painter_config = {
-    //     .canvas = {
-    //         .width = video->width,
-    //         .height = video->height,
-    //     },
-    //     .color_format = ESP_PAINTER_COLOR_FORMAT_RGB565,
-    //     .default_font = &esp_painter_basic_font_24,
-    //     .swap_rgb565 = false,
-    // };
-    painter_config.canvas.width = video->width;
-    painter_config.canvas.height = video->height;
-    esp_painter_init(&painter_config, &painter_handle);
 
     ESP_RETURN_ON_FALSE(snprintf(http_string, sizeof(http_string), "%" PRIu32, video->frame_rate) > 0,
                         ESP_FAIL, TAG, "failed to format framerate buffer");
@@ -620,27 +502,26 @@ static esp_err_t image_stream_handler(httpd_req_t *req)
         //         }
         // }
         // higherhrnet
-        if (!get_pe_result_copy(pe_result_snapshot)) {
-            // 若无新AI推理结构则使用上一次结果
-            ;
+        if (!get_pose_estimation_result(pe_result_snapshot)) {
+            pe_result_snapshot->valid_num = 0;
         }
         PoseKeyPoints* kps_group = pe_result_snapshot->kps_group;
         BBox* bboxs = pe_result_snapshot->bboxs;
         
         for (int i=0; i<pe_result_snapshot->valid_num; ++i) {
             draw_rectangle_rgb((uint16_t*)video->buffer[buf.index], video->width, video->height,
-                    bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1920),
-                    bbox_coordinate_y_scale_map((int)(bboxs[i].y1), 288, 1080),
-                    bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1920), 
-                    bbox_coordinate_y_scale_map((int)(bboxs[i].y2), 288, 1080),
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].x1), 384, 1024),
+                    bbox_coordinate_y_scale_map((int)(bboxs[i].y1), 288, 600),
+                    bbox_coordinate_x_scale_map((int)(bboxs[i].x2), 384, 1024), 
+                    bbox_coordinate_y_scale_map((int)(bboxs[i].y2), 288, 600),
                     0, 0, 255, 0, 0, 6, false);
 
             uint32_t k_x[17];
             uint32_t k_y[17];
 
             for (int j=0; j < 17; ++j) {
-                k_x[j] = bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1920);
-                k_y[j] = bbox_coordinate_y_scale_map((int)(kps_group[i].data[j].y1), 288, 1080);
+                k_x[j] = bbox_coordinate_x_scale_map((int)(kps_group[i].data[j].x1), 384, 1024);
+                k_y[j] = bbox_coordinate_y_scale_map((int)(kps_group[i].data[j].y1), 288, 600);
             }
 
             for (int s = 0; s < (sizeof(skeleton) / sizeof(skeleton[0])); ++s) {
@@ -1266,81 +1147,44 @@ static void metadata_reader_task(void *arg)
 {
     metadata_frame_t frame;
     int ret;
-    uint8_t write_index = 0;
-
     while (true) {
-
-        /* 找一个空闲 buffer */
-        bool found = false;
-        for (int i = 0; i < METADATA_PINGPONG_NUM; i++) {
-            if (!metadata_buf_busy[i]) {
-                write_index = i;
-                found = true;
-                break;
-            }
+        ret = read_metadata(metadata_buf, MAX_DATA_R_BUF_SIZE, &frame.data_size);
+        if (metadata_queue && ret == 0) {
+            ESP_LOGI(TAG, "Read metadata len: %ld", frame.data_size);
+            xQueueSend(metadata_queue, &frame, portMAX_DELAY);
         }
-
-        if (!found) {
-            // 两个 buffer 都在用，说明 parser 跟不上
-            ESP_LOGW(TAG, "No free metadata buffer, drop frame");
-            vTaskDelay(pdMS_TO_TICKS(1));
-            continue;
-        }
-
-        /* 读数据到选中的 buffer */
-        ret = read_metadata(metadata_buf_pool[write_index],
-                            MAX_DATA_R_BUF_SIZE,
-                            &frame.data_size);
-
-        if (ret != 0 || frame.data_size == 0) {
-            continue;
-        }
-
-        metadata_buf_busy[write_index] = true;
-
-        frame.data      = metadata_buf_pool[write_index];
-        frame.index     = write_index;
-
-        ESP_LOGI(TAG, "Read metadata idx=%d len=%ld",
-                 write_index, frame.data_size);
-
-        xQueueSend(metadata_queue, &frame, portMAX_DELAY);
     }
 }
-
 
 static void metadata_parser_task(void *arg)
 {
     metadata_frame_t frame;
 
     while (xQueueReceive(metadata_queue, &frame, portMAX_DELAY) == pdTRUE) {
-
-        if (frame.data_size == 0 ||
-            frame.data_size > MAX_DATA_R_BUF_SIZE) {
-
-            ESP_LOGW(TAG, "Invalid metadata size: %" PRIu32,
-                     frame.data_size);
-            metadata_buf_busy[frame.index] = false;
+        if (frame.data_size == 0 || frame.data_size > MAX_DATA_R_BUF_SIZE) {
+            ESP_LOGW(TAG, "Invalid metadata size: %" PRIu32, frame.data_size);
             continue;
         }
 
-        uint8_t *metadata = frame.data + VALID_DATA_OFFSET;
+        uint8_t *metadata = metadata_buf + VALID_DATA_OFFSET;
+        // printf("\n\n\n");
+        // print_buf_hex(metadata, frame.data_size);
+        // printf("\n\n\n");
 
-        // if(test_spi_bus_by_sim_data(metadata, frame.data_size)) {
-        //     ESP_LOGI(TAG, "TEST PASS");
-        //     print_buf_hex(metadata, 100);
-        //     printf("\n");
-        if (parse_ap_params(metadata, frame.data_size) &&
-            pose_estimate_postprocess_higherhrnet()) {
-            submit_pe_result_from_global();
+        // print_buf_hex(metadata, 12);
+        // printf("\n");
+
+        if(parse_ap_params(metadata, frame.data_size) && pose_estimate_postprocess_higherhrnet()) {
+            // detect_postprocess_yolov8n();
+            // print_pose_estimation_result();
+            // ESP_LOGW(TAG, "Parse Ap Params Failed.");
+            // skip
         } else {
-            // ESP_LOGE(TAG, "TEST NO PASS");
+            clear_pose_estimation_result();
         }
-
-        metadata_buf_busy[frame.index] = false;
+        // ESP_LOGI(TAG, "data_size: %d\n", frame.data_size);
     }
 }
-
 
 void init_i2c_dev(void) {
     i2c_master_get_bus_handle(0, &g_bus_handle);
@@ -1388,64 +1232,6 @@ esp_err_t i2c_read_reg16_u32(uint16_t reg,uint32_t *out) {
     return ESP_OK;
 }
 
-void camera_video_frame_operation(uint8_t *camera_buf, uint8_t camera_buf_index, uint32_t camera_buf_hes, uint32_t camera_buf_ves, size_t camera_buf_len, void *user_data)
-{
-#if CONFIG_EXAMPLE_ENABLE_PRINT_FPS_RATE_VALUE
-    fps_count++;
-    if (fps_count == 50) {
-        int64_t end_time = esp_timer_get_time();
-        ESP_LOGI(TAG, "fps: %f", 1000000.0 / ((end_time - start_time) / 50.0));
-        start_time = end_time;
-        fps_count = 0;
-
-        ESP_LOGI(TAG, "camera_buf_hes: %lu, camera_buf_ves: %lu, camera_buf_len: %d KB", camera_buf_hes, camera_buf_ves, camera_buf_len / 1024);
-    }
-#endif
-
-    ppa_srm_oper_config_t srm_config = {
-        .in.buffer = camera_buf,
-        .in.pic_w = camera_buf_hes,
-        .in.pic_h = camera_buf_ves,
-        .in.block_w = camera_buf_hes,
-        .in.block_h = camera_buf_ves,
-        .in.block_offset_x = (camera_buf_hes > EXAMPLE_LCD_H_RES) ? (camera_buf_hes - EXAMPLE_LCD_H_RES) / 2 : 0,
-           .in.block_offset_y = (camera_buf_ves > EXAMPLE_LCD_V_RES) ? (camera_buf_ves - EXAMPLE_LCD_V_RES) / 2 : 0,
-           .in.srm_cm = APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? PPA_SRM_COLOR_MODE_RGB565 : PPA_SRM_COLOR_MODE_RGB888,
-           .out.buffer = lcd_buffer[camera_buf_index],
-           .out.buffer_size = ALIGN_UP(EXAMPLE_LCD_H_RES * EXAMPLE_LCD_V_RES * (APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? 2 : 3), data_cache_line_size),
-           .out.pic_w = EXAMPLE_LCD_H_RES,
-           .out.pic_h = EXAMPLE_LCD_V_RES,
-           .out.block_offset_x = 0,
-           .out.block_offset_y = 0,
-           .out.srm_cm = APP_VIDEO_FMT == APP_VIDEO_FMT_RGB565 ? PPA_SRM_COLOR_MODE_RGB565 : PPA_SRM_COLOR_MODE_RGB888,
-           .rotation_angle = PPA_SRM_ROTATION_ANGLE_0,
-           .scale_x = 1,
-           .scale_y = 1,
-           .rgb_swap = 0,
-           .byte_swap = 0,
-           .mode = PPA_TRANS_MODE_BLOCKING,
-    };
-
-    if (camera_buf_hes > EXAMPLE_LCD_H_RES || camera_buf_ves > EXAMPLE_LCD_V_RES) {
-        // The resolution of the camera does not match the LCD resolution. Image processing can be done using PPA, but there will be some frame rate loss
-
-        srm_config.in.block_w = (camera_buf_hes > EXAMPLE_LCD_H_RES) ? EXAMPLE_LCD_H_RES : camera_buf_hes;
-        srm_config.in.block_h = (camera_buf_ves > EXAMPLE_LCD_V_RES) ? EXAMPLE_LCD_V_RES : camera_buf_ves;
-
-        ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa_srm_handle, &srm_config));
-
-        esp_painter_draw_line(painter_handle, (uint8_t *)lcd_buffer[camera_buf_index], srm_config.out.buffer_size, 400, 400, 500, 500, ESP_PAINTER_COLOR_RED, 30);
-
-        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(display_panel, 0, 0, srm_config.in.block_w, srm_config.in.block_h, lcd_buffer[camera_buf_index]));
-    } else {
-
-        esp_painter_draw_line(painter_handle, (uint8_t *)camera_buf, srm_config.out.buffer_size, 400, 400, 500, 500, ESP_PAINTER_COLOR_RED, 30);
-
-        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(display_panel, 0, 0, camera_buf_hes, camera_buf_ves, camera_buf));
-    }
-}
-
-
 void app_main(void)
 {
     esp_err_t ret = nvs_flash_init();
@@ -1462,30 +1248,16 @@ void app_main(void)
     ESP_ERROR_CHECK(example_video_init());
     init_i2c_dev();
     init_spi_dev();
+
+    uint32_t imx500_module_fw_version;
+    i2c_read_reg16_u32(DEVICE_VERSION_REG, &imx500_module_fw_version);
+    ESP_LOGI(TAG, "IMX500 Camera Module FW: 0x%x", imx500_module_fw_version);
+
     gpio_reset_pin(PIN_NUM_CS);
     /* Set the GPIO as a push/pull output */
     gpio_set_direction(PIN_NUM_CS, GPIO_MODE_OUTPUT);
     gpio_set_level(PIN_NUM_CS, 1);          // CS ↑
 
-    // while (1)
-    // {
-    //     gpio_set_level(PIN_NUM_CS, 1); // CS idle high
-    //     vTaskDelay(pdMS_TO_TICKS(10));
-    //     gpio_set_level(PIN_NUM_CS, 0); // CS idle high
-    //     vTaskDelay(pdMS_TO_TICKS(10));
-    // }
-
-    // while (1)
-    // {
-    //    gpio_set_level(PIN_NUM_CS, 1);
-    //    ESP_LOGI(TAG, "CS UP");
-    //    vTaskDelay(pdMS_TO_TICKS(10));
-    //    gpio_set_level(PIN_NUM_CS, 0);
-    //    ESP_LOGI(TAG, "CS DOWN");
-    //    vTaskDelay(pdMS_TO_TICKS(10));
-    // }
-    
-#if 0
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
@@ -1500,31 +1272,31 @@ void app_main(void)
     ESP_ERROR_CHECK(example_connect());
 
     web_cam_video_config_t config[] = {
-    #if EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR
-            {
-                .dev_name = ESP_VIDEO_MIPI_CSI_DEVICE_NAME,
-            },
-    #endif /* EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR */
-    #if EXAMPLE_ENABLE_DVP_CAM_SENSOR
-            {
-                .dev_name = ESP_VIDEO_DVP_DEVICE_NAME,
-            },
-    #endif /* EXAMPLE_ENABLE_DVP_CAM_SENSOR */
-    #if EXAMPLE_ENABLE_SPI_CAM_0_SENSOR
-            {
-                .dev_name = ESP_VIDEO_SPI_DEVICE_NAME,
-            },
-    #endif /* EXAMPLE_ENABLE_SPI_CAM_0_SENSOR */
-    #if EXAMPLE_ENABLE_SPI_CAM_1_SENSOR
-            {
-                .dev_name = ESP_VIDEO_SPI_DEVICE_1_NAME,
-            },
-    #endif /* EXAMPLE_ENABLE_SPI_CAM_1_SENSOR */
-    #if EXAMPLE_ENABLE_USB_UVC_CAM_SENSOR
-            {
-                .dev_name = ESP_VIDEO_USB_UVC_DEVICE_NAME(0),
-            },
-    #endif /* EXAMPLE_ENABLE_USB_UVC_CAM_SENSOR */
+#if EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR
+        {
+            .dev_name = ESP_VIDEO_MIPI_CSI_DEVICE_NAME,
+        },
+#endif /* EXAMPLE_ENABLE_MIPI_CSI_CAM_SENSOR */
+#if EXAMPLE_ENABLE_DVP_CAM_SENSOR
+        {
+            .dev_name = ESP_VIDEO_DVP_DEVICE_NAME,
+        },
+#endif /* EXAMPLE_ENABLE_DVP_CAM_SENSOR */
+#if EXAMPLE_ENABLE_SPI_CAM_0_SENSOR
+        {
+            .dev_name = ESP_VIDEO_SPI_DEVICE_NAME,
+        },
+#endif /* EXAMPLE_ENABLE_SPI_CAM_0_SENSOR */
+#if EXAMPLE_ENABLE_SPI_CAM_1_SENSOR
+        {
+            .dev_name = ESP_VIDEO_SPI_DEVICE_1_NAME,
+        },
+#endif /* EXAMPLE_ENABLE_SPI_CAM_1_SENSOR */
+#if EXAMPLE_ENABLE_USB_UVC_CAM_SENSOR
+        {
+            .dev_name = ESP_VIDEO_USB_UVC_DEVICE_NAME(0),
+        },
+#endif /* EXAMPLE_ENABLE_USB_UVC_CAM_SENSOR */
     };
 
     int config_count = sizeof(config) / sizeof(config[0]);
@@ -1533,78 +1305,19 @@ void app_main(void)
     ESP_ERROR_CHECK(start_cam_web_server(config, config_count));
 
     ESP_LOGI(TAG, "Camera web server starts");
-#else
-    // Initialize the LCD
-    ESP_ERROR_CHECK(app_lcd_init(&display_panel));
 
-    painter_config.canvas.width = EXAMPLE_LCD_H_RES;
-    painter_config.canvas.height = EXAMPLE_LCD_V_RES;
-    esp_painter_init(&painter_config, &painter_handle);
-
-    // Initialize the PPA
-    ppa_client_config_t ppa_srm_config = {
-        .oper_type = PPA_OPERATION_SRM,
-    };
-    ESP_ERROR_CHECK(ppa_register_client(&ppa_srm_config, &ppa_srm_handle));
-    ESP_ERROR_CHECK(esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &data_cache_line_size));
-
-    // Initialize the video camera
-    // ret = app_video_main(NULL);
-    // if (ret != ESP_OK) {
-    //     ESP_LOGE(TAG, "video main init failed with error 0x%x", ret);
-    //     return;
-    // }
-
-    // Open the video device
-    int video_cam_fd0 = app_video_open(EXAMPLE_CAM_DEV_PATH, APP_VIDEO_FMT);
-    if (video_cam_fd0 < 0) {
-        ESP_LOGE(TAG, "video cam open failed");
+    metadata_buf = (uint8_t *)malloc(MAX_DATA_R_BUF_SIZE);
+    if (!metadata_buf) {
+        ESP_LOGE(TAG, "Failed to allocate metadata buffer");
         return;
     }
 
-    // Get the LCD frame buffer
-    #if EXAMPLE_LCD_BUF_NUM == 2
-        ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(display_panel, 2, &lcd_buffer[0], &lcd_buffer[1]));
-    #else
-        ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(display_panel, 3, &lcd_buffer[0], &lcd_buffer[1], &lcd_buffer[2]));
-    #endif
-
-    // Set the video buffer
-    #if CONFIG_EXAMPLE_USE_MEMORY_MAPPING
-        ESP_LOGI(TAG, "Using map buffer");
-        ESP_ERROR_CHECK(app_video_set_bufs(video_cam_fd0, EXAMPLE_CAM_BUF_NUM, NULL)); // When setting the camera video buffer, it can be written as NULL to automatically allocate the buffer using mapping
-    #else
-        ESP_LOGI(TAG, "Using user defined buffer");
-        #if CONFIG_CAMERA_SC2336_MIPI_RAW8_1024x600_30FPS
-            ESP_ERROR_CHECK(app_video_set_bufs(video_cam_fd0, EXAMPLE_CAM_BUF_NUM, (void *)lcd_buffer));
-        #else
-            void *camera_buf[EXAMPLE_CAM_BUF_NUM];
-            for (int i = 0; i < EXAMPLE_CAM_BUF_NUM; i++) {
-                camera_buf[i] = heap_caps_aligned_calloc(data_cache_line_size, 1, app_video_get_buf_size(), MALLOC_CAP_SPIRAM);
-            }
-            ESP_ERROR_CHECK(app_video_set_bufs(video_cam_fd0, EXAMPLE_CAM_BUF_NUM, (void *)camera_buf));
-        #endif
-    #endif
-
-    // Register the video frame operation callback
-    ESP_ERROR_CHECK(app_video_register_frame_operation_cb(camera_video_frame_operation));
-
-    // Start the camera stream task
-    ESP_ERROR_CHECK(app_video_stream_task_start(video_cam_fd0, 0, NULL));
-
-    #if CONFIG_EXAMPLE_ENABLE_PRINT_FPS_RATE_VALUE
-        start_time = esp_timer_get_time();  // Get the initial time for frame rate statistics
-    #endif
-
-#endif
-
-    metadata_queue = xQueueCreate(METADATA_PINGPONG_NUM, sizeof(metadata_frame_t));
+    metadata_queue = xQueueCreate(1, sizeof(metadata_frame_t));
     if (!metadata_queue) {
         ESP_LOGE(TAG, "Failed to create metadata queue");
         return;
     }
-    init_metadata_buf_pool();
-    init_pe_result_pool();
+
     xTaskCreatePinnedToCore(metadata_reader_task, "metadata_reader", 4096, NULL, 5, NULL, 1);
     xTaskCreatePinnedToCore(metadata_parser_task, "metadata_parser", 8192, NULL, 5, NULL, 0);
 

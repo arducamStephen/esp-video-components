@@ -396,7 +396,7 @@ static const uint32_t s_isp_isp_format[] = {
     V4L2_PIX_FMT_RGB565,
     V4L2_PIX_FMT_RGB24,
     V4L2_PIX_FMT_YUV420,
-    V4L2_PIX_FMT_YUV422P,
+    V4L2_PIX_FMT_UYVY,
 };
 static const int s_isp_isp_format_nums = ARRAY_SIZE(s_isp_isp_format);
 
@@ -638,9 +638,9 @@ static void isp_init_awb_param(struct isp_video *isp_video, esp_isp_awb_config_t
     awb_config->white_patch.blue_green_ratio.min = awb->bg_min;
 
     video_rect2window(isp_video->video, &awb_config->window);
-    // Ensure subwindow is within main window to avoid invalid AWB config
-    awb_config->subwindow = awb_config->window;
-
+#if ESP_VIDEO_ISP_DEVICE_AWB_SUBWIN
+    video_rect2window(isp_video->video, &awb_config->subwindow);
+#endif
 }
 
 static esp_err_t isp_start_awb(struct isp_video *isp_video)
@@ -678,7 +678,7 @@ fail_0:
 static esp_err_t isp_reconfigure_awb(struct isp_video *isp_video)
 {
     if (isp_video->awb_started) {
-        esp_isp_awb_config_t awb_config = {0};
+        esp_isp_awb_config_t awb_config;
 
         isp_init_awb_param(isp_video, &awb_config);
 
@@ -795,7 +795,7 @@ static esp_err_t isp_start_ccm(struct isp_video *isp_video)
     return ESP_OK;
 }
 
-static esp_err_t isp_reconfig_ccm(struct isp_video *isp_video)
+static esp_err_t isp_reconfigure_ccm(struct isp_video *isp_video)
 {
     esp_isp_ccm_config_t ccm_config;
 
@@ -810,9 +810,9 @@ static esp_err_t isp_reconfig_ccm(struct isp_video *isp_video)
 }
 
 #if !ESP_VIDEO_ISP_DEVICE_WBG
-static esp_err_t isp_reconfigure_white_blance(struct isp_video *isp_video)
+static esp_err_t isp_reconfigure_white_balance(struct isp_video *isp_video)
 {
-    return isp_reconfig_ccm(isp_video);
+    return isp_reconfigure_ccm(isp_video);
 }
 #endif
 
@@ -921,7 +921,7 @@ static esp_err_t isp_start_sharpen(struct isp_video *isp_video)
     return ESP_OK;
 }
 
-static esp_err_t isp_reconfig_sharpen(struct isp_video *isp_video)
+static esp_err_t isp_reconfigure_sharpen(struct isp_video *isp_video)
 {
     esp_isp_sharpen_config_t sharpen_config;
 
@@ -1088,17 +1088,8 @@ static esp_err_t isp_start_wbg(struct isp_video *isp_video)
 
     esp_isp_wbg_config_t wbg_cfg;
     memset(&wbg_cfg, 0, sizeof(esp_isp_wbg_config_t));
-    wbg_cfg.flags.update_once_configured = 1;
-    esp_err_t ret = esp_isp_wbg_configure(isp_video->isp_proc, &wbg_cfg);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "wbg configure failed: err=0x%x update_once=%d", ret, (int)wbg_cfg.flags.update_once_configured);
-        return ret;
-    }
-    ret = esp_isp_wbg_enable(isp_video->isp_proc);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "wbg enable failed: err=0x%x", ret);
-        return ret;
-    }
+    ESP_RETURN_ON_ERROR(esp_isp_wbg_configure(isp_video->isp_proc, &wbg_cfg), TAG, "failed to configure wbg");
+    ESP_RETURN_ON_ERROR(esp_isp_wbg_enable(isp_video->isp_proc), TAG, "failed to enable wbg");
 
     isp_wbg_gain_t wbg_gain = {
         .gain_r = wbg_r,
@@ -1106,11 +1097,7 @@ static esp_err_t isp_start_wbg(struct isp_video *isp_video)
         .gain_b = wbg_b,
     };
 
-    ret = esp_isp_wbg_set_wb_gain(isp_video->isp_proc, wbg_gain);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "wbg set gain failed: err=0x%x", ret);
-        return ret;
-    }
+    ESP_RETURN_ON_ERROR(esp_isp_wbg_set_wb_gain(isp_video->isp_proc, wbg_gain), TAG, "failed to start wbg");
 
     isp_video->wbg_started = true;
     return ESP_OK;
@@ -1131,13 +1118,7 @@ static esp_err_t isp_reconfigure_wbg(struct isp_video *isp_video)
         .gain_b = wbg_b,
     };
 
-    esp_err_t ret = esp_isp_wbg_set_wb_gain(isp_video->isp_proc, wbg_gain);
-    if (ret == ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "wbg reconfigure skipped: wbg not enabled");
-        isp_video->wbg_started = false;
-        return ESP_OK;
-    }
-    ESP_RETURN_ON_ERROR(ret, TAG, "failed to reconfigure wbg");
+    ESP_RETURN_ON_ERROR(esp_isp_wbg_set_wb_gain(isp_video->isp_proc, wbg_gain), TAG, "failed to reconfigure wbg");
 
     return ESP_OK;
 }
@@ -1148,13 +1129,8 @@ static esp_err_t isp_stop_wbg(struct isp_video *isp_video)
         return ESP_OK;
     }
 
-    // Stop path: don't attempt reconfigure; just disable if enabled
-    esp_err_t ret = esp_isp_wbg_disable(isp_video->isp_proc);
-    if (ret == ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "wbg disable skipped: wbg not enabled");
-    } else {
-        ESP_RETURN_ON_ERROR(ret, TAG, "failed to disable wbg");
-    }
+    // If all the gains are 1.0f, disable the wbg
+    ESP_RETURN_ON_ERROR(esp_isp_wbg_disable(isp_video->isp_proc), TAG, "failed to disable wbg");
     isp_video->wbg_started = false;
     return ESP_OK;
 }
@@ -1356,7 +1332,7 @@ static esp_err_t isp_stop_af(struct isp_video *isp_video)
     return ESP_OK;
 }
 
-static esp_err_t isp_reconfig_af(struct isp_video *isp_video)
+static esp_err_t isp_reconfigure_af(struct isp_video *isp_video)
 {
     if (!isp_video->af_support) {
         return ESP_OK;
@@ -1616,7 +1592,7 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
                 }
 
                 if (ISP_STARTED(isp_video)) {
-                    ESP_GOTO_ON_ERROR(isp_reconfig_ccm(isp_video), exit, TAG, "failed to reconfigure CCM");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_ccm(isp_video), exit, TAG, "failed to reconfigure CCM");
                 }
             } else {
                 if (ISP_STARTED(isp_video)) {
@@ -1630,12 +1606,12 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
             isp_video->red_balance_gain = (float)ctrl->value / V4L2_CID_RED_BALANCE_DEN;
             if (ctrl->value > 0) {
                 if (ISP_STARTED(isp_video)) {
-                    ESP_GOTO_ON_ERROR(isp_reconfigure_wbg(isp_video), exit, TAG, "failed to reconfigure red balance");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_wbg(isp_video), exit, TAG, "failed to reconfigure WBG");
                 }
             } else {
                 if (ISP_STARTED(isp_video)) {
                     isp_video->red_balance_gain = 1.0f;
-                    ESP_GOTO_ON_ERROR(isp_stop_wbg(isp_video), exit, TAG, "failed to stop wbg");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_wbg(isp_video), exit, TAG, "failed to reconfigure WBG");
                 }
             }
 #else
@@ -1647,7 +1623,7 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
             }
 
             if (ISP_STARTED(isp_video)) {
-                ESP_GOTO_ON_ERROR(isp_reconfig_ccm(isp_video), exit, TAG, "failed to reconfigure red balance");
+                ESP_GOTO_ON_ERROR(isp_reconfigure_ccm(isp_video), exit, TAG, "failed to reconfigure CCM");
             }
 #endif
             break;
@@ -1656,12 +1632,12 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
             isp_video->blue_balance_gain = (float)ctrl->value / V4L2_CID_BLUE_BALANCE_DEN;
             if (ctrl->value > 0) {
                 if (ISP_STARTED(isp_video)) {
-                    ESP_GOTO_ON_ERROR(isp_reconfigure_wbg(isp_video), exit, TAG, "failed to reconfigure blue balance");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_wbg(isp_video), exit, TAG, "failed to reconfigure WBG");
                 }
             } else {
                 if (ISP_STARTED(isp_video)) {
                     isp_video->blue_balance_gain = 1.0f;
-                    ESP_GOTO_ON_ERROR(isp_stop_wbg(isp_video), exit, TAG, "failed to stop blue balance");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_wbg(isp_video), exit, TAG, "failed to reconfigure WBG");
                 }
             }
 #else
@@ -1673,7 +1649,7 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
             }
 
             if (ISP_STARTED(isp_video)) {
-                ESP_GOTO_ON_ERROR(isp_reconfig_ccm(isp_video), exit, TAG, "failed to reconfigure blue balance");
+                ESP_GOTO_ON_ERROR(isp_reconfigure_ccm(isp_video), exit, TAG, "failed to reconfigure CCM");
             }
 #endif
             break;
@@ -1693,7 +1669,7 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
                 }
 
                 if (ISP_STARTED(isp_video)) {
-                    ESP_GOTO_ON_ERROR(isp_reconfig_sharpen(isp_video), exit, TAG, "failed to reconfigure sharpen");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_sharpen(isp_video), exit, TAG, "failed to reconfigure sharpen");
                 }
             } else {
                 if (ISP_STARTED(isp_video)) {
@@ -1750,9 +1726,9 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
 
                 if (ISP_STARTED(isp_video)) {
 #if ESP_VIDEO_ISP_DEVICE_WBG
-                    ESP_GOTO_ON_ERROR(isp_reconfigure_wbg(isp_video), exit, TAG, "failed to reconfigure wbg");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_wbg(isp_video), exit, TAG, "failed to reconfigure WBG");
 #else
-                    ESP_GOTO_ON_ERROR(isp_reconfigure_white_blance(isp_video), exit, TAG, "failed to reconfigure wbg");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_white_balance(isp_video), exit, TAG, "failed to reconfigure white balance");
 #endif
                 }
             } else {
@@ -1760,9 +1736,9 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
                     isp_video->red_balance_gain = 1.0f;
                     isp_video->blue_balance_gain = 1.0f;
 #if ESP_VIDEO_ISP_DEVICE_WBG
-                    ESP_GOTO_ON_ERROR(isp_stop_wbg(isp_video), exit, TAG, "failed to stop wbg");
+                    ESP_GOTO_ON_ERROR(isp_stop_wbg(isp_video), exit, TAG, "failed to stop WBG");
 #else
-                    ESP_GOTO_ON_ERROR(isp_reconfigure_white_blance(isp_video), exit, TAG, "failed to reconfigure wbg");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_white_balance(isp_video), exit, TAG, "failed to reconfigure white balance");
 #endif
                 }
             }
@@ -1867,7 +1843,7 @@ static esp_err_t isp_video_set_ext_ctrl(struct esp_video *video, const struct v4
             isp_video->af_config = *af;
             if (af->enable) {
                 if (ISP_STARTED(isp_video)) {
-                    ESP_GOTO_ON_ERROR(isp_reconfig_af(isp_video), exit, TAG, "failed to reconfigure AF");
+                    ESP_GOTO_ON_ERROR(isp_reconfigure_af(isp_video), exit, TAG, "failed to reconfigure AF");
                 }
             } else {
                 if (ISP_STARTED(isp_video)) {
@@ -2471,7 +2447,7 @@ esp_err_t esp_video_isp_check_format(esp_video_csi_state_t *state, const struct 
     }
 
     if ((format->fmt.pix.pixelformat == V4L2_PIX_FMT_YUV420) ||
-            (format->fmt.pix.pixelformat == V4L2_PIX_FMT_YUV422P)) {
+            (format->fmt.pix.pixelformat == V4L2_PIX_FMT_UYVY)) {
         if ((format->fmt.pix.ycbcr_enc != V4L2_YCBCR_ENC_DEFAULT) &&
                 (format->fmt.pix.ycbcr_enc != V4L2_YCBCR_ENC_601) &&
                 (format->fmt.pix.ycbcr_enc != V4L2_YCBCR_ENC_709)) {

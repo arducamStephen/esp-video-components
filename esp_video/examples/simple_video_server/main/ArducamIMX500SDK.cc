@@ -18,6 +18,34 @@ static std::vector<const uint8_t*> s_output_tensor_ptrs;
 static const ::flatbuffers::Vector<::flatbuffers::Offset<apParams::fb::FBOutputTensor>>* s_output_tensors_fb;
 DetectionResult g_d_result;
 PoseEstimationResult g_pe_result;
+static PoseEstimationResult s_pe_staging_result;
+
+static SemaphoreHandle_t s_pe_result_mutex;
+static EventGroupHandle_t s_pe_result_event;
+
+#define PE_RESULT_READY_BIT BIT0
+#define PE_RESULT_WAIT_TIMEOUT_TICKS pdMS_TO_TICKS(100)
+
+static bool ensure_pose_result_sync_objects(void)
+{
+    if (!s_pe_result_mutex) {
+        s_pe_result_mutex = xSemaphoreCreateMutex();
+        if (!s_pe_result_mutex) {
+            printf("[PE] create mutex failed\n");
+            return false;
+        }
+    }
+
+    if (!s_pe_result_event) {
+        s_pe_result_event = xEventGroupCreate();
+        if (!s_pe_result_event) {
+            printf("[PE] create event group failed\n");
+            return false;
+        }
+    }
+
+    return true;
+}
 
 static float bbox_area(const std::vector<float>& box)
 {
@@ -130,6 +158,54 @@ static void filter_pose_results_by_joint_quality(std::vector<std::vector<float>>
     keypoints.swap(kept_kps);
     scores.swap(kept_scores);
     boxes.swap(kept_boxes);
+}
+
+static bool lock_pose_result(TickType_t ticks_to_wait)
+{
+    if (!ensure_pose_result_sync_objects()) {
+        return false;
+    }
+    return xSemaphoreTake(s_pe_result_mutex, ticks_to_wait) == pdPASS;
+}
+
+bool get_pose_estimation_result(PoseEstimationResult *out_result)
+{
+    if (!out_result) {
+        return false;
+    }
+    if (!ensure_pose_result_sync_objects()) {
+        return false;
+    }
+
+    EventBits_t bits = xEventGroupWaitBits(
+        s_pe_result_event,
+        PE_RESULT_READY_BIT,
+        pdFALSE,
+        pdFALSE,
+        PE_RESULT_WAIT_TIMEOUT_TICKS);
+    if ((bits & PE_RESULT_READY_BIT) == 0) {
+        return false;
+    }
+
+    if (!lock_pose_result(pdMS_TO_TICKS(10))) {
+        return false;
+    }
+    *out_result = g_pe_result;
+    xSemaphoreGive(s_pe_result_mutex);
+    return true;
+}
+
+void clear_pose_estimation_result(void)
+{
+    if (!ensure_pose_result_sync_objects()) {
+        return;
+    }
+    if (!lock_pose_result(pdMS_TO_TICKS(10))) {
+        return;
+    }
+    memset(&g_pe_result, 0, sizeof(g_pe_result));
+    xSemaphoreGive(s_pe_result_mutex);
+    xEventGroupClearBits(s_pe_result_event, PE_RESULT_READY_BIT);
 }
 
 int32_t print_buf_hex(const uint8_t* buf, uint32_t len) {
@@ -285,7 +361,8 @@ bool parse_ap_params(const uint8_t* data, size_t data_len) {
         }
 
         uint8_t bits_per_element = t->bitsPerElement();
-        uint32_t tensor_bytes = (bits_per_element == 16) ? (tensor_elements * 2) : tensor_elements;
+        
+        uint32_t tensor_bytes = (bits_per_element/8) * tensor_elements;
         uint32_t tensor_bytes_aligned = ALIGN_UP(tensor_bytes, 4);
 
         if ((size_t)data_offset + (size_t)output_data_offset + (size_t)tensor_bytes_aligned > data_len) {
@@ -423,8 +500,9 @@ bool pose_estimate_postprocess_higherhrnet(void) {
     printf("[PE] val scale=%.6f shift=%d\n", raw_val->scale(), raw_val->shift());
 #endif
 
-    auto kps_group = g_pe_result.kps_group;
-    auto bboxs = g_pe_result.bboxs;
+    memset(&s_pe_staging_result, 0, sizeof(s_pe_staging_result));
+    auto kps_group = s_pe_staging_result.kps_group;
+    auto bboxs = s_pe_staging_result.bboxs;
 
     const float confidence_threshold = 0.3f;
 
@@ -523,12 +601,19 @@ bool pose_estimate_postprocess_higherhrnet(void) {
 #endif
         }
 
-        g_pe_result.valid_num++;
+        s_pe_staging_result.valid_num++;
     }
 
 #if PE_DEBUG
-    printf("[PE] valid_num=%d\n", g_pe_result.valid_num);
+    printf("[PE] valid_num=%d\n", s_pe_staging_result.valid_num);
 #endif
+
+    if (!lock_pose_result(pdMS_TO_TICKS(10))) {
+        return false;
+    }
+    g_pe_result = s_pe_staging_result;
+    xSemaphoreGive(s_pe_result_mutex);
+    xEventGroupSetBits(s_pe_result_event, PE_RESULT_READY_BIT);
 
     return true;
 }
@@ -547,14 +632,5 @@ uint32_t bbox_coordinate_y_scale_map(float y, uint32_t s_h, uint32_t t_h) {
     return y_;
 }
 
-bool test_spi_bus_by_sim_data(const uint8_t* data, size_t data_len) {
-    for (int i = 0; i < data_len; ++i) {
-        if (data[i] != 0x55){
-            printf("Error data[%d]: 0x%x\n", i, data[i]);
-            return false;
-        }   
-    }
-    return true;
-}
 
 }

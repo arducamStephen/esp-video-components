@@ -45,14 +45,24 @@ static esp_err_t spi_get_input_frame_type(esp_cam_sensor_output_format_t sensor_
     esp_err_t ret = ESP_OK;
 
     switch (sensor_format) {
-    case ESP_CAM_SENSOR_PIXFORMAT_RGB565:
+    case ESP_CAM_SENSOR_PIXFORMAT_RGB565_LE:
         *in_color = CAM_CTLR_COLOR_RGB565;
         *v4l2_format = V4L2_PIX_FMT_RGB565;
         *bpp = 16;
         break;
-    case ESP_CAM_SENSOR_PIXFORMAT_YUV422:
+    case ESP_CAM_SENSOR_PIXFORMAT_RGB565_BE:
+        *in_color = CAM_CTLR_COLOR_RGB565;
+        *v4l2_format = V4L2_PIX_FMT_RGB565X;
+        *bpp = 16;
+        break;
+    case ESP_CAM_SENSOR_PIXFORMAT_YUV422_UYVY:
         *in_color = CAM_CTLR_COLOR_YUV422;
-        *v4l2_format = V4L2_PIX_FMT_YUV422P;
+        *v4l2_format = V4L2_PIX_FMT_UYVY;
+        *bpp = 16;
+        break;
+    case ESP_CAM_SENSOR_PIXFORMAT_YUV422_YUYV:
+        *in_color = CAM_CTLR_COLOR_YUV422;
+        *v4l2_format = V4L2_PIX_FMT_YUYV;
         *bpp = 16;
         break;
     case ESP_CAM_SENSOR_PIXFORMAT_RGB888:
@@ -175,10 +185,12 @@ static esp_err_t spi_video_start(struct esp_video *video, uint32_t type)
 
     esp_cam_ctlr_spi_config_t spi_config = {
         .intf = spi_video->spi_config.intf,
+        .io_mode = spi_video->spi_config.io_mode,
         .spi_port = spi_video->spi_config.spi_port,
         .spi_cs_pin = spi_video->spi_config.spi_cs_pin,
         .spi_sclk_pin = spi_video->spi_config.spi_sclk_pin,
         .spi_data0_io_pin = spi_video->spi_config.spi_data0_io_pin,
+        .spi_data1_io_pin = spi_video->spi_config.spi_data1_io_pin,
         .input_data_color_type = spi_video->in_color,
         .h_res = CAPTURE_VIDEO_GET_FORMAT_WIDTH(video),
         .v_res = CAPTURE_VIDEO_GET_FORMAT_HEIGHT(video),

@@ -31,7 +31,7 @@ Now we have implementations based on:
 | SPI0 | /dev/video3 | Capture  | / | camera output pixel format |
 | SPI1(2) | /dev/video4 | Capture  | / | camera output pixel format |
 | USB | /dev/video40 | Capture  | / | camera output pixel format |
-| JPEG encode | /dev/video10 | M2M | RGB565: V4L2_PIX_FMT_RGB565<br> RGB888: V4L2_PIX_FMT_RGB24<br> YUV422: V4L2_PIX_FMT_YUV422P<br> Gray8: V4L2_PIX_FMT_GREY | JPEG: V4L2_PIX_FMT_JPEG |
+| JPEG HW encode | /dev/video10 | M2M | RGB565: V4L2_PIX_FMT_RGB565<br> RGB888: V4L2_PIX_FMT_RGB24<br> YUV422: V4L2_PIX_FMT_UYVY<br> Gray8: V4L2_PIX_FMT_GREY | JPEG: V4L2_PIX_FMT_JPEG |
 | H.264 encode | /dev/video11 | M2M | YUV420: V4L2_PIX_FMT_YUV420 | H.264: V4L2_PIX_FMT_H264 |
 | ISP | /dev/video20 | Meta | camera output pixel format  | Metadata: V4L2_META_FMT_ESP_ISP_STATS |
 
@@ -60,6 +60,18 @@ ioctl(fd, VIDIOC_G_EXT_CTRLS, &controls);
 ```
 
 Please note that this class only supports "p_u8" and "size" fields of v4l2_ext_control, other fields are not supported.
+
+## V4L2 Extended Commands
+
+| Command | Type | Description |
+|:-:|:-|:-|
+| VIDIOC_S_SENSOR_FMT | pointer of "esp_cam_sensor_format_t" | Set sensor output format |
+| VIDIOC_G_SENSOR_FMT | pointer of "esp_cam_sensor_format_t" | Get sensor output format |
+| VIDIOC_SET_OWNER | pointer of "int" | Increase video device reference when input value is not equal to 0 or decrease video device reference when input value is equal to 0  |
+| VIDIOC_S_MOTOR_FMT | pointer of "esp_cam_motor_format_t" | Set motor motion format |
+| VIDIOC_G_MOTOR_FMT | pointer of "esp_cam_motor_format_t" | Get motor motion format |
+| VIDIOC_S_DQBUF_TIMEOUT | pointer of "struct timeval" | Set dequeue buffer timeout value |
+| VIDIOC_G_DQBUF_TIMEOUT | pointer of "struct timeval" | Get dequeue buffer timeout value |
 
 ## V4L2 Control IDs
 
