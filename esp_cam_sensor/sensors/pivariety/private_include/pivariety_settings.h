@@ -23,7 +23,7 @@ static const pivariety_reginfo_t pivariety_mipi_stream_on[] = {
 
 static const pivariety_reginfo_t pivariety_mipi_stream_off[] = {
     {STREAM_ON,            0x00000000},
-    {PIVARIETY_REG_END,       0x00000000},
+    {PIVARIETY_REG_END,    0x00000000},
 };
 
 static const pivariety_reginfo_t pivariety_MIPI_2lane_raw10_1920x1080_30fps[] = {

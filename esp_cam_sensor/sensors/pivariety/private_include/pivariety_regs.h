@@ -51,33 +51,6 @@ extern "C" {
 #define SENSOR_WR_REG                  0x0502
 
 
-#ifndef FIELD_GET
-#define FIELD_GET(mask, reg) (((reg) & (mask)) >> (__builtin_ffsll(mask) - 1))
-#endif
-
-#ifndef GENMASK
-#define GENMASK(h, l) \
-    (((~0ULL) - (1ULL << (l)) + 1) & (~0ULL >> (63 - (h))))
-#endif
-
-#define IMX500_REG_ADDR_MASK		GENMASK(15, 0)
-#define IMX500_REG_WIDTH_SHIFT		16
-#define IMX500_REG_WIDTH_MASK		GENMASK(19, 16)
-
-#define IMX500_REG_WIDTH_BYTES(x)		FIELD_GET(IMX500_REG_WIDTH_MASK, x)
-#define IMX500_REG_WIDTH(x)		(IMX500_REG_WIDTH_BYTES(x) << 3)
-#define IMX500_REG_ADDR(x)			FIELD_GET(IMX500_REG_ADDR_MASK, x)
-#define IMX500_REG_LE			BIT(20)
-
-
-#define IMX500_REG8(x)			((1 << IMX500_REG_WIDTH_SHIFT) | (x))
-#define IMX500_REG16(x)			((2 << IMX500_REG_WIDTH_SHIFT) | (x))
-#define IMX500_REG24(x)			((3 << IMX500_REG_WIDTH_SHIFT) | (x))
-#define IMX500_REG32(x)			((4 << IMX500_REG_WIDTH_SHIFT) | (x))
-#define IMX500_REG64(x)			((8 << IMX500_REG_WIDTH_SHIFT) | (x))
-
-#define IMX500_REG_CHIP_ID IMX500_REG16(0x0016)
-
 #ifdef __cplusplus
 }
 #endif
