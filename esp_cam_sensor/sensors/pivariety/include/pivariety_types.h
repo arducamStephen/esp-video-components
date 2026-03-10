@@ -13,20 +13,36 @@
 extern "C" {
 #endif
 
-/*
- * pivariety camera sensor register type definition.
- */
-struct v4l2_rect {
-    int32_t left;
-    int32_t top;
-    uint32_t width;
-    uint32_t height;
-};
-
 typedef struct {
     uint16_t reg;
     uint32_t val;
 } pivariety_reginfo_t;
+
+typedef enum {
+    PIVARIETY_CTRL_MIN,
+    PIVARIETY_CTRL_MAX,
+    PIVARIETY_CTRL_STEP,
+    PIVARIETY_CTRL_DEF,
+    PIVARIETY_CTRL_VALUE,
+} pivariety_ctrltype_t;
+
+typedef enum {
+    PIVARIETY_RAW8         = 0x2A,
+    PIVARIETY_RAW10        = 0x2B,
+    PIVARIETY_RAW12        = 0x2C,
+    PIVARIETY_YUV420_8BIT  = 0x18,
+    PIVARIETY_YUV420_10BIT = 0x19,
+    PIVARIETY_YUV422_8BIT  = 0X1E,
+    PIVARIETY_JPEG         = 0X30,
+} pivariety_pixtype_t;
+
+typedef enum {
+    PIVARIETY_BAYER_ORDER_BGGR = 0,
+    PIVARIETY_BAYER_ORDER_GBRG,
+    PIVARIETY_BAYER_ORDER_GRBG,
+    PIVARIETY_BAYER_ORDER_RGGB,
+    PIVARIETY_BAYER_ORDER_GRAY,
+} pivariety_bayerorder_t;
 
 #ifdef __cplusplus
 }

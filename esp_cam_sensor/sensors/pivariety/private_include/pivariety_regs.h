@@ -50,6 +50,7 @@ extern "C" {
 #define SENSOR_RD_REG                  0x0501
 #define SENSOR_WR_REG                  0x0502
 
+#define ERROR_DATA                     0xFFFFFFFE
 
 #ifdef __cplusplus
 }
