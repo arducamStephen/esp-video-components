@@ -1278,32 +1278,54 @@ static esp_err_t pivariety_get_length_of_set(esp_cam_sensor_device_t *dev, uint1
 
 static esp_err_t pivariety_map_format(pivariety_pixtype_t pivariety_format_type, esp_cam_sensor_format_t *format_info) 
 {
+    if (format_info == NULL) {
+        ESP_LOGE(TAG, "format_info is NULL");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const char *format_label = NULL;
     switch (pivariety_format_type) {
         case PIVARIETY_RAW8:
             format_info->format = ESP_CAM_SENSOR_PIXFORMAT_RAW8;
+            format_label = "RAW8";
             break;
         case PIVARIETY_RAW10:
             format_info->format = ESP_CAM_SENSOR_PIXFORMAT_RAW10;
+            format_label = "RAW10";
             break;
         case PIVARIETY_RAW12:
             format_info->format = ESP_CAM_SENSOR_PIXFORMAT_RAW12;
+            format_label = "RAW12";
             break;
         case PIVARIETY_YUV420_8BIT:
             format_info->format = ESP_CAM_SENSOR_PIXFORMAT_YUV420;
+            format_label = "YUV420_8bit";
             break;
         case PIVARIETY_YUV420_10BIT:
             format_info->format = ESP_CAM_SENSOR_PIXFORMAT_YUV420;
+            format_label = "YUV420_10bit";
             break;
         case PIVARIETY_YUV422_8BIT:
             format_info->format = ESP_CAM_SENSOR_PIXFORMAT_YUV422;
+            format_label = "YUV422_8bit";
             break;
         case PIVARIETY_JPEG:
             format_info->format = ESP_CAM_SENSOR_PIXFORMAT_JPEG;
+            format_label = "JPEG";
             break;
         default:
             ESP_LOGE(TAG, "Unsupported format: 0x%x", pivariety_format_type);
             return ESP_ERR_NOT_SUPPORTED;
     }
+
+    char tmp[128];
+    unsigned lanes = (unsigned)format_info->mipi_info.lane_num;
+    unsigned xclk_mhz = (unsigned)(format_info->xclk / 1000000U);
+    snprintf(tmp, sizeof(tmp), "MIPI_%ulane_%uMinput_%s_%ux%u_%ufps",
+                lanes, xclk_mhz, (format_label ? format_label : "UNKNOWN"),
+                (unsigned)format_info->width, (unsigned)format_info->height, (unsigned)format_info->fps);
+
+    format_info->name = strdup(tmp);
 
     return ESP_OK;
 }
@@ -1523,7 +1545,6 @@ static esp_err_t pivariety_enum_format(esp_cam_sensor_device_t *dev)
             ret += pivariety_update_ctrl(dev, V4L2_CID_HBLANK, (uint32_t*)&isp_info.isp_v1_info.hts, PIVARIETY_CTRL_DEF);
             ret += pivariety_update_ctrl(dev, V4L2_CID_ANALOGUE_GAIN, (uint32_t*)&isp_info.isp_v1_info.gain_def, PIVARIETY_CTRL_DEF);
             ret += pivariety_update_ctrl(dev, V4L2_CID_EXPOSURE, (uint32_t*)&isp_info.isp_v1_info.exp_def, PIVARIETY_CTRL_DEF);
-            ret += pivariety_map_format(format_type, &format_info);
             if(ret != ESP_OK){
                 return ret;
             }
@@ -1545,6 +1566,7 @@ static esp_err_t pivariety_enum_format(esp_cam_sensor_device_t *dev)
             isp_info.isp_v1_info.hts += width;
             isp_info.isp_v1_info.vts += height;
             isp_info.isp_v1_info.tline_ns = (uint32_t)(isp_info.isp_v1_info.hts / (isp_info.isp_v1_info.pclk / 1000000.0) * 1000);
+            ret += pivariety_map_format(format_type, &format_info);
 
             memcpy(&pivariety_isp_info[index], &isp_info, sizeof(esp_cam_sensor_isp_info_t));
             memcpy(&pivariety_format_info[index], &format_info, sizeof(esp_cam_sensor_format_t));
@@ -1602,8 +1624,6 @@ static esp_err_t pivariety_get_format(esp_cam_sensor_device_t *dev, esp_cam_sens
     if (dev->cur_format != NULL) {
         memcpy(format, dev->cur_format, sizeof(esp_cam_sensor_format_t));
         ret = ESP_OK;
-    }else {
-        ret = pivariety_enum_format(dev);
     }
     
     return ret;
