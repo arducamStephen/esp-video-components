@@ -58,7 +58,7 @@ struct pivariety_cam {
 #define PIVARIETY_SUPPORT_NUM CONFIG_CAMERA_PIVARIETY_MAX_SUPPORT
 
 esp_cam_sensor_format_t *pivariety_format_info;
-size_t pivariety_format_info_size; // now stores number of elements (not bytes)
+size_t pivariety_format_info_size;
 esp_cam_sensor_isp_info_t *pivariety_isp_info;
 static const uint32_t s_limited_abs_gain = CONFIG_CAMERA_PIVARIETY_ABSOLUTE_GAIN_LIMIT;
 static size_t s_limited_abs_gain_index;
@@ -1076,17 +1076,6 @@ static esp_err_t pivariety_write_array(esp_sccb_io_handle_t sccb_handle, pivarie
     return ret;
 }
 
-static esp_err_t pivariety_set_reg_bits(esp_sccb_io_handle_t sccb_handle, uint16_t reg, uint8_t offset, uint8_t length, uint8_t value)
-{
-    esp_err_t ret = ESP_OK;
-    return ret;
-}
-
-static esp_err_t pivariety_set_test_pattern(esp_cam_sensor_device_t *dev, int enable)
-{
-    return pivariety_set_reg_bits(dev->sccb_handle, 0x4501, 3, 1, enable ? 0x01 : 0x00);
-}
-
 static esp_err_t pivariety_hw_reset(esp_cam_sensor_device_t *dev)
 {
     if (dev->reset_pin >= 0) {
@@ -1129,16 +1118,6 @@ static esp_err_t pivariety_set_stream(esp_cam_sensor_device_t *dev, int enable)
     return ret;
 }
 
-static esp_err_t pivariety_set_mirror(esp_cam_sensor_device_t *dev, int enable)
-{
-    return 0;
-}
-
-static esp_err_t pivariety_set_vflip(esp_cam_sensor_device_t *dev, int enable)
-{
-    return 0;
-}
-
 static esp_err_t pivariety_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam_sensor_param_desc_t *qdesc)
 {
     esp_err_t ret = ESP_OK;
@@ -1155,14 +1134,6 @@ static esp_err_t pivariety_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam
         qdesc->enumeration.count = s_limited_abs_gain_index;
         qdesc->enumeration.elements = pivariety_abs_gain_val_map;
         qdesc->default_value = dev->cur_format->isp_info->isp_v1_info.gain_def; // default gain index
-        break;
-    case ESP_CAM_SENSOR_VFLIP:
-    case ESP_CAM_SENSOR_HMIRROR:
-        qdesc->type = ESP_CAM_SENSOR_PARAM_TYPE_NUMBER;
-        qdesc->number.minimum = 0;
-        qdesc->number.maximum = 1;
-        qdesc->number.step = 1;
-        qdesc->default_value = 0;
         break;
     default: {
         ESP_LOGD(TAG, "id=%"PRIx32" is not supported", qdesc->id);
@@ -1231,16 +1202,6 @@ static esp_err_t pivariety_set_para_value(esp_cam_sensor_device_t *dev, uint32_t
         }
         break;
     }
-    case ESP_CAM_SENSOR_VFLIP: {
-        int *value = (int *)arg;
-        ret = pivariety_set_vflip(dev, *value);
-        break;
-    }
-    case ESP_CAM_SENSOR_HMIRROR: {
-        int *value = (int *)arg;
-        ret = pivariety_set_mirror(dev, *value);
-        break;
-    }
     default: {
         ESP_LOGE(TAG, "set id=%" PRIx32 " is not supported", id);
         ret = ESP_ERR_INVALID_ARG;
@@ -1285,25 +1246,22 @@ static esp_err_t pivariety_get_length_of_set(esp_cam_sensor_device_t *dev, uint1
 
     ret = pivariety_read(dev->sccb_handle, reg, &val);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "read reg fail");
+        ESP_LOGE(TAG, "get length of set fail");
         return ret;
     }
 
     while (1) {
-        ret = pivariety_write(dev->sccb_handle, reg, index);
+        ret += pivariety_write(dev->sccb_handle, reg, index);
+        ret += pivariety_read(dev->sccb_handle, reg, &tmp_len);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "write reg fail");
-            return ret;
-        }
-        ret = pivariety_read(dev->sccb_handle, reg, &tmp_len);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "read reg fail");
+            ESP_LOGE(TAG, "get length of set fail");
             return ret;
         }
 
         if (tmp_len == ERROR_DATA) {
             break;
         }
+
         index++;
         /* guard to avoid infinite loop */
         if (index > 10000) {
@@ -1313,12 +1271,9 @@ static esp_err_t pivariety_get_length_of_set(esp_cam_sensor_device_t *dev, uint1
     }
 
     *length = index;
-    ret = pivariety_write(dev->sccb_handle, reg, val);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "restore reg value failed");
-    }
 
-    return ESP_OK;
+    ret = pivariety_write(dev->sccb_handle, reg, val);
+    return ret;
 }
 
 static esp_err_t pivariety_map_format(pivariety_pixtype_t pivariety_format_type, esp_cam_sensor_format_t *format_info) 
@@ -1531,7 +1486,7 @@ static esp_err_t pivariety_enum_format(esp_cam_sensor_device_t *dev)
     if (pivariety_format_info == NULL) {
         size_t total = num_format * num_resolution;
         pivariety_format_info = calloc(total, sizeof(esp_cam_sensor_format_t));
-        pivariety_format_info_size = total; // store element count
+        pivariety_format_info_size = total;
         if (!pivariety_format_info) {
             ESP_LOGE(TAG, "No memory for format info");
             return ESP_ERR_NO_MEM;
@@ -1674,9 +1629,6 @@ static esp_err_t pivariety_priv_ioctl(esp_cam_sensor_device_t *dev, uint32_t cmd
         break;
     case ESP_CAM_SENSOR_IOC_S_STREAM:
         ret = pivariety_set_stream(dev, *(int *)arg);
-        break;
-    case ESP_CAM_SENSOR_IOC_S_TEST_PATTERN:
-        ret = pivariety_set_test_pattern(dev, *(int *)arg);
         break;
     case ESP_CAM_SENSOR_IOC_G_REG:
         sensor_reg = (esp_cam_sensor_reg_val_t *)arg;
