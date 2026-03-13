@@ -190,6 +190,18 @@ static esp_err_t pivariety_set_stream(esp_cam_sensor_device_t *dev, int enable)
     return ret;
 }
 
+static esp_err_t pivariety_set_mirror(esp_cam_sensor_device_t *dev, int enable)
+{
+    pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_HFLIP);
+    return pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, enable ? 0x01 : 0x00);
+}
+
+static esp_err_t pivariety_set_vflip(esp_cam_sensor_device_t *dev, int enable)
+{
+    pivariety_write(dev->sccb_handle, CTRL_ID_REG, V4L2_CID_VFLIP);
+    return pivariety_write(dev->sccb_handle, CTRL_VALUE_REG, enable ? 0x01 : 0x00);
+}
+
 static esp_err_t pivariety_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam_sensor_param_desc_t *qdesc)
 {
     esp_err_t ret = ESP_OK;
@@ -206,6 +218,14 @@ static esp_err_t pivariety_query_para_desc(esp_cam_sensor_device_t *dev, esp_cam
         qdesc->enumeration.count = s_limited_abs_gain_index;
         qdesc->enumeration.elements = pivariety_abs_gain_val_map;
         qdesc->default_value = dev->cur_format->isp_info->isp_v1_info.gain_def; // default gain index
+        break;
+    case ESP_CAM_SENSOR_VFLIP:
+    case ESP_CAM_SENSOR_HMIRROR:
+        qdesc->type = ESP_CAM_SENSOR_PARAM_TYPE_NUMBER;
+        qdesc->number.minimum = 0;
+        qdesc->number.maximum = 1;
+        qdesc->number.step = 1;
+        qdesc->default_value = 0;
         break;
     default: {
         ESP_LOGD(TAG, "id=%"PRIx32" is not supported", qdesc->id);
@@ -272,6 +292,16 @@ static esp_err_t pivariety_set_para_value(esp_cam_sensor_device_t *dev, uint32_t
         if (ret == ESP_OK) {
             cam_pivariety->pivariety_para.gain_index = u32_val;
         }
+        break;
+    }
+    case ESP_CAM_SENSOR_VFLIP: {
+        int *value = (int *)arg;
+        ret = pivariety_set_vflip(dev, *value);
+        break;
+    }
+    case ESP_CAM_SENSOR_HMIRROR: {
+        int *value = (int *)arg;
+        ret = pivariety_set_mirror(dev, *value);
         break;
     }
     default: {
